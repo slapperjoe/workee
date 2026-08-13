@@ -1,0 +1,33 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# Secrets & config
+.env
+auth-state.json
+
+# Browser profiles (contain cookies/auth state)
+azure-browser-profile/
+
+# Node / Electron
+node_modules/
+avd-electron/app.html
+avd-electron/dist/
+avd-electron/build/
+
+# Rust / Tauri build artifacts
+target/
+avd-tauri/src-tauri/target/
+avd-tauri/src-tauri/gen/
+
+# Web client telemetry logs (contain session/auth data)
+Web_Client_Logs*.txt
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo

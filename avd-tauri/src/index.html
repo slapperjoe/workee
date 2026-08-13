@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="UTF-8"><title>AVD Dashboard</title>
+<style>
+body{background:#0d1117;color:#c9d1d9;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,sans-serif;margin:0;padding:0}
+header{background:#161b22;border-bottom:1px solid #30363d;padding:12px 24px;display:flex;align-items:center;justify-content:space-between}
+header h1{font-size:18px;font-weight:600;color:#58a6ff;margin:0}
+#status{font-size:13px;color:#8b949e}
+.dot{width:8px;height:8px;border-radius:50%;display:inline-block;margin-right:4px}
+.dot.online{background:#3fb950}.dot.offline{background:#f85149}.dot.waiting{background:#d29922}
+main{max-width:1200px;margin:0 auto;padding:24px}
+.bar{display:flex;align-items:center;justify-content:space-between;margin-bottom:16px}
+.bar h2{font-size:14px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:#8b949e;margin:0}
+.bar button{padding:6px 14px;background:#161b22;border:1px solid #30363d;color:#c9d1d9;border-radius:6px;cursor:pointer;font-size:13px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:16px}
+.card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:20px}
+.card h3{font-size:16px;font-weight:600;margin:0 0 4px 0}
+.card .meta{font-size:12px;color:#8b949e;margin-bottom:14px}
+.badge{display:inline-block;font-size:11px;padding:2px 8px;border-radius:12px;font-weight:600;margin-right:8px}
+.badge.on{background:rgba(63,185,80,.15);color:#3fb950}
+.badge.off{background:rgba(139,148,158,.15);color:#8b949e}
+.badge.cpc{background:rgba(88,166,255,.15);color:#58a6ff}
+.card button{width:100%;padding:10px;border:none;border-radius:6px;font-size:14px;font-weight:600;cursor:pointer;background:#58a6ff;color:#fff}
+.card button:hover{opacity:.85}
+.empty{text-align:center;padding:48px 24px;color:#8b949e}
+#log{position:fixed;bottom:0;left:0;right:0;background:#000;color:#0f0;font-family:monospace;font-size:11px;padding:8px;height:200px;overflow-y:auto;white-space:pre-wrap}
+</style></head>
+<body>
+<header><h1>AVD VM Dashboard</h1><div id="status"><span class="dot waiting"></span> Connecting...</div></header>
+<main>
+<div class="bar"><h2>Virtual Machines</h2><div><button onclick="testWin()">Test Window</button> <button onclick="load()">Refresh</button></div></div>
+<div class="grid" id="grid"><div class="empty">Loading...</div></div>
+</main>
+<div id="log"></div>
+<script>
+function L(m){var d=document.getElementById('log');d.textContent+=m+'\\n';d.scrollTop=d.scrollHeight}
+var API='http://127.0.0.1:8080';
+function E(id){return document.getElementById(id)}
+function esc(s){return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')}
+
+async function check(){
+  try{
+    var s=await fetch(API+'/api/state').then(function(r){return r.json()});
+    if(s.authenticated){E('status').innerHTML='<span class="dot online"></span> Ready &middot; '+s.vm_count+' VM(s)';load()}
+    else{E('status').innerHTML='<span class="dot waiting"></span> Authenticating...';setTimeout(check,3000)}
+  }catch(e){E('status').innerHTML='<span class="dot offline"></span> Offline';setTimeout(check,5000)}
+}
+async function load(){
+  try{
+    var d=await fetch(API+'/api/vms').then(function(r){return r.json()});
+    var vms=d.vms||[];var g=E('grid');
+    if(!vms.length){g.innerHTML='<div class="empty">No VMs found</div>';return}
+    g.innerHTML=vms.map(function(vm){var s=vm.status||'Unknown';var run=s.toLowerCase().indexOf('running')>=0;var c=run?'on':(vm.kind=='CloudPC'?'cpc':'off');
+      return'<div class="card"><h3>'+esc(vm.name)+'</h3><div class="meta"><span class="badge '+c+'">'+esc(s)+'</span>'+(vm.kind?' <span>'+esc(vm.kind)+'</span>':'')+'</div><button onclick="connect(\x27'+esc(vm.name)+'\x27)">Connect</button></div>'}).join('')}
+  catch(e){E('grid').innerHTML='<div class="empty">Error: '+esc(e.message)+'</div>'}
+}
+function testWin(){
+  L('testWin...');
+  window.__TAURI__.invoke('test_window')
+  .then(function(r){L('testWin OK: '+r)})
+  .catch(function(e){L('testWin ERR: '+e)})
+}
+function connect(name){
+  L('connect: '+name);
+  fetch(API+'/api/connect',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({vm_name:name})})
+  .then(function(r){return r.json()})
+  .then(function(d){
+    if(d.url){window.location.replace(d.url)}
+    else{L('ERR: no url')}
+  })
+  .catch(function(e){L('ERR: '+e.message)})
+}
+check();setInterval(check,15000);
+</script>
+</body></html>
