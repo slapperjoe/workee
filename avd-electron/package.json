@@ -3,9 +3,12 @@
   "version": "1.0.0",
   "main": "main.js",
   "scripts": {
-    "start": "electron ."
+    "postinstall": "install-electron",
+    "start": "electron .",
+    "build": "electron-packager . Workee --platform=linux --arch=x64 --out=dist --overwrite --icon=icon.png --app-version=1.0.0"
   },
   "devDependencies": {
-    "electron": "latest"
+    "electron": "^43.4.0",
+    "@electron/packager": "^20.3.0"
   }
 }

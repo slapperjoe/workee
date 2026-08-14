@@ -1,3 +1,7 @@
+if (process.platform === 'linux' && !process.env.GDK_BACKEND) {
+  process.env.GDK_BACKEND = 'x11';
+}
+
 const { app, BrowserWindow, BrowserView, ipcMain, session, desktopCapturer, Menu, screen, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
