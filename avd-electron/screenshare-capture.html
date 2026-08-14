@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+</head>
+<body>
+<script>
+(async () => {
+  const report = (state) => { try { window.screenshare.report(state); } catch (e) {} };
+
+  let cfg;
+  try {
+    cfg = await window.screenshare.getConfig();
+  } catch (e) {
+    report({ state: 'error', message: 'no config' });
+    return;
+  }
+
+  let stream;
+  try {
+    stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+  } catch (e) {
+    report({ state: 'error', message: 'capture denied: ' + (e.name || 'error') });
+    return;
+  }
+
+  const pc = new RTCPeerConnection({ iceServers: cfg.iceServers });
+  stream.getTracks().forEach((t) => pc.addTrack(t, stream));
+  stream.getVideoTracks()[0].onended = () => report({ state: 'ended' });
+
+  let ws = null;
+  let sentOffer = false;
+
+  function connect() {
+    sentOffer = false;
+    ws = new WebSocket(cfg.signalingUrl);
+
+    ws.onopen = () => report({ state: 'connecting' });
+
+    ws.onmessage = async (e) => {
+      let msg;
+      try { msg = JSON.parse(e.data); } catch (err) { return; }
+      try {
+        if (msg.type === 'peer-ready' && !sentOffer) {
+          sentOffer = true;
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+          ws.send(JSON.stringify({ type: 'offer', sdp: pc.localDescription }));
+        } else if (msg.type === 'answer') {
+          await pc.setRemoteDescription(msg.sdp);
+        } else if (msg.type === 'ice') {
+          await pc.addIceCandidate(msg.candidate);
+        } else if (msg.type === 'peer-gone') {
+          sentOffer = false;
+          report({ state: 'connecting' });
+        }
+      } catch (err) {}
+    };
+
+    ws.onerror = () => report({ state: 'error', message: 'signaling unreachable' });
+    ws.onclose = () => report({ state: 'connecting' });
+  }
+
+  pc.onicecandidate = (e) => {
+    if (e.candidate && ws && ws.readyState === 1) {
+      ws.send(JSON.stringify({ type: 'ice', candidate: e.candidate }));
+    }
+  };
+  pc.onconnectionstatechange = () => {
+    report({ state: pc.connectionState === 'connected' ? 'connected' : 'connecting' });
+  };
+
+  connect();
+})();
+</script>
+</body>
+</html>

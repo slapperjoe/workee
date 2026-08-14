@@ -1,0 +1,9 @@
+{
+  "name": "workee-screenshare",
+  "private": true,
+  "version": "1.0.0",
+  "description": "WebRTC signaling server + receiver for host-to-VM screen share",
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
