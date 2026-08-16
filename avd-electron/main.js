@@ -47,6 +47,7 @@ const tabBarContent = `<!DOCTYPE html><html><head><style>
   .ctl svg{width:15px;height:15px;fill:#8b949e}
   .ctl .dot{width:7px;height:7px;border-radius:50%;background:#30363d}
   .ctl.on .dot{background:#3fb950;box-shadow:0 0 4px #3fb950}
+  .ctl.obs .dot{background:#58a6ff;box-shadow:0 0 4px #58a6ff}
   .ctl.off{color:#f85149}
   .ctl.off svg{fill:#f85149}
   .ctl.warn .dot{background:#d29922}
@@ -93,6 +94,7 @@ function pushState() {
     tabs: tabs.map(x => ({ id: x.id, title: x.title, active: x.id === activeTabId })),
     speaker: { muted: t ? t.muted : false, audible: t ? t.audible : false },
     mic: { enabled: t ? t.micEnabled : true, active: t ? t.micActive : false },
+    videoSource: t ? t.videoSource : null,
     devices: { input: t ? t.inputLabel : '', output: t ? t.outputLabel : '' },
     screenshare: { on: screensharing, connected: screenshareConnected },
     screencam: screenCam,
@@ -116,6 +118,7 @@ function createTab(id, url, title) {
     micEnabled: true,
     micActive: false,
     videoActive: false,
+    videoSource: null,
     inputLabel: '',
     outputLabel: '',
     view: null,
@@ -363,6 +366,7 @@ app.whenReady().then(function() {
     if (!t) return;
     t.micActive = !!(s && s.audio);
     t.videoActive = !!(s && s.video);
+    t.videoSource = s && s.video ? (s.videoSource || null) : null;
     if (s && s.audioDevice) t.inputLabel = s.audioDevice;
     pushState();
   });

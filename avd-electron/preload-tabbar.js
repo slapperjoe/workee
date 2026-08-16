@@ -33,8 +33,10 @@ function render(state) {
   const mic = state.mic;
   const spkCls = spk.muted ? 'off' : (spk.audible ? 'on' : '');
   const micCls = !mic.enabled ? 'off' : (mic.active ? 'on' : '');
-  const camCls = state.screencam ? (state.captureReady === false ? 'warn' : 'on') : '';
-  const camTitle = state.captureReady === false
+  const camCls = state.screencam ? (state.videoSource === 'obs' ? 'obs' : (state.captureReady === false ? 'warn' : 'on')) : '';
+  const camTitle = state.videoSource === 'obs'
+    ? 'Using OBS Virtual Camera'
+    : state.captureReady === false
     ? 'Use host screen as webcam (screen capture unavailable)'
     : 'Use host screen as webcam';
   const outLabel = state.devices.output || 'Speaker';

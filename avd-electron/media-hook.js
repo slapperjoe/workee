@@ -4,6 +4,7 @@
 
   var tracks = [];
   var deviceMap = {};
+  var obsDeviceId = null;
   var screenCam = false;
   var camOpts = { width: 1280, height: 720, fps: 30, smooth: 0 };
 
@@ -12,6 +13,7 @@
     var video = false;
     var audioDevice = null;
     var videoDevice = null;
+    var videoSource = null;
     for (var i = 0; i < tracks.length; i++) {
       var t = tracks[i];
       if (t.readyState !== 'live') continue;
@@ -26,11 +28,12 @@
         if (!videoDevice && t.getSettings) {
           var s2 = t.getSettings();
           videoDevice = (s2 && deviceMap[s2.deviceId]) || null;
+          videoSource = (s2 && s2.deviceId === obsDeviceId) ? 'obs' : 'camera';
         }
       }
     }
     try {
-      window.__workee.report({ audio: audio, video: video, audioDevice: audioDevice, videoDevice: videoDevice });
+      window.__workee.report({ audio: audio, video: video, audioDevice: audioDevice, videoDevice: videoDevice, videoSource: videoSource });
     } catch (e) {}
   }
 
@@ -38,10 +41,14 @@
     if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
     navigator.mediaDevices.enumerateDevices().then(function (devs) {
       deviceMap = {};
+      obsDeviceId = null;
       var out = { audioinput: null, audiooutput: null, videoinput: null };
       for (var i = 0; i < devs.length; i++) {
         var d = devs[i];
         if (d.label) deviceMap[d.deviceId] = d.label;
+        if (d.kind === 'videoinput' && d.label && /obs|virtual camera|v4l2loopback|hardware isp camera/i.test(d.label) && !obsDeviceId) {
+          obsDeviceId = d.deviceId;
+        }
         if (d.kind === 'audioinput' && !out.audioinput && d.label) out.audioinput = d.label;
         if (d.kind === 'audiooutput' && !out.audiooutput && d.label) out.audiooutput = d.label;
         if (d.kind === 'videoinput' && !out.videoinput && d.label) out.videoinput = d.label;
@@ -126,6 +133,37 @@
     md.getUserMedia = function (constraints) {
       var wantVideo = !!(constraints && constraints.video);
       var wantAudio = !!(constraints && constraints.audio);
+
+      if (screenCam && wantVideo && obsDeviceId) {
+        var obsVideo = {};
+        if (constraints.video !== true) {
+          for (var key in constraints.video) obsVideo[key] = constraints.video[key];
+        }
+        obsVideo.deviceId = { exact: obsDeviceId };
+        return orig({ audio: constraints.audio, video: obsVideo }).then(function (stream) {
+          track(stream);
+          report();
+          updateDevices();
+          return stream;
+        }).catch(function () {
+          return screenCam && md.getDisplayMedia ? md.getDisplayMedia({
+            video: { frameRate: { max: camOpts.fps }, width: { max: camOpts.width }, height: { max: camOpts.height } },
+            audio: false,
+          }).then(function (screenStream) {
+            return smoothStream(screenStream).then(function (videoStream) {
+              var out = new MediaStream();
+              videoStream.getVideoTracks().forEach(function (t) { out.addTrack(t); });
+              var audioDone = Promise.resolve();
+              if (wantAudio) {
+                audioDone = orig({ audio: constraints.audio, video: false }).then(function (micStream) {
+                  micStream.getAudioTracks().forEach(function (t) { out.addTrack(t); });
+                }).catch(function () {});
+              }
+              return audioDone.then(function () { track(out); report(); updateDevices(); return out; });
+            });
+          }) : orig(constraints);
+        });
+      }
 
       if (screenCam && wantVideo && md.getDisplayMedia) {
         return md.getDisplayMedia({
