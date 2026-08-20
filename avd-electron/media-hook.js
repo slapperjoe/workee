@@ -6,6 +6,7 @@
   var deviceMap = {};
   var obsDeviceId = null;
   var screenCam = false;
+  var micEnabled = true;
   var camOpts = { width: 1280, height: 720, fps: 30, smooth: 0 };
 
   function report() {
@@ -61,6 +62,7 @@
     if (!stream) return;
     stream.getTracks().forEach(function (t) {
       if (t.kind === 'audio' || t.kind === 'video') {
+        if (t.kind === 'audio') t.enabled = micEnabled;
         tracks.push(t);
         t.addEventListener('ended', report);
         t.addEventListener('mute', report);
@@ -70,8 +72,9 @@
   }
 
   window.__workeeSetMic = function (enabled) {
+    micEnabled = !!enabled;
     for (var i = 0; i < tracks.length; i++) {
-      if (tracks[i].kind === 'audio') tracks[i].enabled = enabled;
+      if (tracks[i].kind === 'audio') tracks[i].enabled = micEnabled;
     }
     report();
   };
@@ -88,43 +91,6 @@
     }
   };
 
-  function smoothStream(screenStream) {
-    var smooth = camOpts.smooth || 0;
-    if (!smooth) return Promise.resolve(screenStream);
-
-    var video = document.createElement('video');
-    video.autoplay = true;
-    video.muted = true;
-    video.playsInline = true;
-    video.srcObject = screenStream;
-    video.play().catch(function () {});
-
-    var canvas = document.createElement('canvas');
-    canvas.width = camOpts.width;
-    canvas.height = camOpts.height;
-    var ctx = canvas.getContext('2d');
-    var blurPx = smooth === 2 ? 2.5 : 1.2;
-
-    function draw() {
-      var vw = video.videoWidth, vh = video.videoHeight;
-      if (!vw || !vh) return;
-      var scale = Math.min(canvas.width / vw, canvas.height / vh);
-      var dw = vw * scale, dh = vh * scale;
-      var dx = (canvas.width - dw) / 2, dy = (canvas.height - dh) / 2;
-      ctx.fillStyle = '#000';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.filter = 'blur(' + blurPx + 'px)';
-      ctx.drawImage(video, dx, dy, dw, dh);
-      ctx.filter = 'none';
-    }
-
-    var out = canvas.captureStream(camOpts.fps);
-    var vt = out.getVideoTracks()[0];
-    if (vt && 'contentHint' in vt) { try { vt.contentHint = 'detail'; } catch (e) {} }
-    var timer = setInterval(draw, Math.round(1000 / camOpts.fps));
-    vt.addEventListener('ended', function () { clearInterval(timer); video.srcObject = null; });
-    return Promise.resolve(out);
-  }
 
   var md = navigator.mediaDevices;
   if (md && md.getUserMedia) {
@@ -134,7 +100,10 @@
       var wantVideo = !!(constraints && constraints.video);
       var wantAudio = !!(constraints && constraints.audio);
 
-      if (screenCam && wantVideo && obsDeviceId) {
+      if (screenCam && wantVideo) {
+        if (!obsDeviceId) {
+          return Promise.reject(new Error('AVD Electron: screen-cam requested but OBS virtual camera is not available'));
+        }
         var obsVideo = {};
         if (constraints.video !== true) {
           for (var key in constraints.video) obsVideo[key] = constraints.video[key];
@@ -146,56 +115,7 @@
           updateDevices();
           return stream;
         }).catch(function () {
-          return screenCam && md.getDisplayMedia ? md.getDisplayMedia({
-            video: { frameRate: { max: camOpts.fps }, width: { max: camOpts.width }, height: { max: camOpts.height } },
-            audio: false,
-          }).then(function (screenStream) {
-            return smoothStream(screenStream).then(function (videoStream) {
-              var out = new MediaStream();
-              videoStream.getVideoTracks().forEach(function (t) { out.addTrack(t); });
-              var audioDone = Promise.resolve();
-              if (wantAudio) {
-                audioDone = orig({ audio: constraints.audio, video: false }).then(function (micStream) {
-                  micStream.getAudioTracks().forEach(function (t) { out.addTrack(t); });
-                }).catch(function () {});
-              }
-              return audioDone.then(function () { track(out); report(); updateDevices(); return out; });
-            });
-          }) : orig(constraints);
-        });
-      }
-
-      if (screenCam && wantVideo && md.getDisplayMedia) {
-        return md.getDisplayMedia({
-          video: { frameRate: { max: camOpts.fps }, width: { max: camOpts.width }, height: { max: camOpts.height } },
-          audio: false,
-        }).then(function (screenStream) {
-          return smoothStream(screenStream).then(function (videoStream) {
-            var out = new MediaStream();
-            videoStream.getVideoTracks().forEach(function (t) {
-              try { if ('contentHint' in t) t.contentHint = 'detail'; } catch (e) {}
-              out.addTrack(t);
-            });
-            var audioDone = Promise.resolve();
-            if (wantAudio) {
-              audioDone = orig({ audio: constraints.audio, video: false }).then(function (micStream) {
-                micStream.getAudioTracks().forEach(function (t) { out.addTrack(t); });
-              }).catch(function () {});
-            }
-            return audioDone.then(function () {
-              track(out);
-              report();
-              updateDevices();
-              return out;
-            });
-          });
-        }).catch(function () {
-          return orig(constraints).then(function (stream) {
-            track(stream);
-            report();
-            updateDevices();
-            return stream;
-          });
+          return Promise.reject(new Error('AVD Electron: OBS virtual camera is not available'));
         });
       }
 
@@ -211,6 +131,40 @@
   if (navigator.mediaDevices && navigator.mediaDevices.addEventListener) {
     navigator.mediaDevices.addEventListener('devicechange', updateDevices);
   }
+
+  var __kaMark = 0;
+  window.__workeeMarkKA = function () {
+    __kaMark = Date.now() + 500;
+  };
+  ['keydown', 'mousedown', 'wheel', 'contextmenu'].forEach(function (type) {
+    document.addEventListener(type, function (e) {
+      if (Date.now() < __kaMark) return;
+      if (type === 'keydown' && (e.key === 'Control' || e.code === 'ControlLeft')) return;
+      (window.__workee && window.__workee.keepAliveInput) ? window.__workee.keepAliveInput() : null;
+    }, { passive: true, capture: true });
+  });
+
+  var _fsDoc = document.createElement('div');
+  var _fsEl = _fsDoc;
+  var __origDocFull = Document.prototype.requestFullscreen;
+  var __origElFull = Element.prototype.requestFullscreen;
+  var __blockFullscreen = false;
+  window.__workeeSetBlockFullscreen = function (enabled) {
+    __blockFullscreen = !!enabled;
+    if (__blockFullscreen) {
+      __origDocFull = __origDocFull || Document.prototype.requestFullscreen;
+      __origElFull = __origElFull || Element.prototype.requestFullscreen;
+      Document.prototype.requestFullscreen = function () {
+        return Promise.reject(new Error('Fullscreen disabled by AVD Electron'));
+      };
+      Element.prototype.requestFullscreen = function () {
+        return Promise.reject(new Error('Fullscreen disabled by AVD Electron'));
+      };
+    } else {
+      Document.prototype.requestFullscreen = __origDocFull;
+      Element.prototype.requestFullscreen = __origElFull;
+    }
+  };
 
   updateDevices();
   report();

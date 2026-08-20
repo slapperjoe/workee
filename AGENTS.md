@@ -1,15 +1,17 @@
 # AGENTS.md
 
-Electron-only desktop shell for the AVD (Windows 365) web dashboard. No tests, no lint, no build step, no CI.
+Electron-only desktop shell for the AVD (Windows 365) web dashboard. No tests, no lint, no CI.
 
 ## Commands
 
 ```bash
-python launch_electron.py            # preferred: sets GDK_BACKEND=x11 (needed on Wayland)
-cd avd-electron && npm install && npx electron .   # direct; "start" script = "electron ."
+python launch_electron.py            # dev: sets GDK_BACKEND=x11 (needed on Wayland)
+cd avd-electron && npm install && npx electron .   # dev; "start" script = "electron ."
+cd avd-electron && npm run install-app            # build + install to system (~/.local)
+cd avd-electron && sudo ./install.sh /opt/Workee /usr/local/bin /usr/share/applications  # system-wide install
 ```
 
-There is no test/lint/typecheck command. `package.json` has only a `start` script.
+No test/lint/typecheck command. `package.json` scripts: `start`, `build` (electron-packager), `install-app` (install.sh).
 
 ## Hard-earned context (do not undo)
 
@@ -32,6 +34,7 @@ There is no test/lint/typecheck command. `package.json` has only a `start` scrip
 - `avd-electron/media-hook.js` — main-world `getUserMedia` tracker + screen-as-webcam substitution (injected via `executeJavaScript`)
 - `avd-electron/store.js` — tiny JSON settings store (`userData/settings.json`); persists `screenCamSettings` (`{width,height,fps,smooth}`)
 - `launch_electron.py` — launcher (sets `GDK_BACKEND=x11`)
+- `avd-electron/install.sh` — build + install to system (copies to `--install-dir`, symlinks to `--bin-dir`, writes `.desktop` to `--desktop-dir`)
 - `screenshare/` — standalone WebRTC screen-share: `signaling-server.js` (Node `ws`, runs in the VM, also serves `receiver.html`), `receiver.html` (VM side)
 - `avd-electron/screenshare-capture.html` + `preload-screenshare.js` — host side: hidden window does `getDisplayMedia` → WebRTC → signaling
 - Root `README.md` is the only doc; `.gitignore` excludes `node_modules/`, generated `app.html`, and browser/auth artifacts.

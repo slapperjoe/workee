@@ -5,6 +5,7 @@
   "scripts": {
     "postinstall": "install-electron",
     "start": "electron .",
+    "install-app": "./install.sh",
     "build": "electron-packager . Workee --platform=linux --arch=x64 --out=dist --overwrite --icon=icon.png --app-version=1.0.0"
   },
   "devDependencies": {

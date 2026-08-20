@@ -3,6 +3,8 @@ node_modules/
 avd-electron/app.html
 avd-electron/dist/
 avd-electron/build/
+# stray build artifacts (hashed bundles, e.g. main.9bbbd594.js)
+main.*.js
 
 # Python (launcher only)
 .venv/

@@ -23,6 +23,10 @@ let screenshareConnected = false;
 let screenCam = false;
 let screenCamSettings = { width: 1280, height: 720, fps: 30, smooth: 0 };
 let captureReady = false;
+let keepAliveDuration = 30;
+let kaIntent = false;
+let blockFullscreen = false;
+let zoomPercent = 100;
 const signalingUrl = process.env.SCREENSHARE_SIGNALING_URL || 'ws://localhost:8080';
 
 let mediaHook = '';
@@ -42,7 +46,7 @@ const tabBarContent = `<!DOCTYPE html><html><head><style>
   .t .tx:hover{background:#30363d}
   .t .tx:hover svg{fill:#c9d1d9}
   .controls{display:flex;align-items:center;gap:6px;padding:0 10px;border-left:1px solid #30363d;height:36px;flex-shrink:0}
-  .ctl{display:flex;align-items:center;gap:5px;cursor:pointer;padding:0 6px;height:36px;color:#8b949e;user-select:none}
+  .ctl{display:flex;align-items:center;gap:5px;cursor:pointer;padding:0 6px;height:36px;color:#8b949e;user-select:none;position:relative}
   .ctl:hover{background:#21262d}
   .ctl svg{width:15px;height:15px;fill:#8b949e}
   .ctl .dot{width:7px;height:7px;border-radius:50%;background:#30363d}
@@ -50,6 +54,7 @@ const tabBarContent = `<!DOCTYPE html><html><head><style>
   .ctl.obs .dot{background:#58a6ff;box-shadow:0 0 4px #58a6ff}
   .ctl.off{color:#f85149}
   .ctl.off svg{fill:#f85149}
+  .ctl.off::after{content:'';position:absolute;left:6px;top:17px;width:15px;height:2px;background:#f85149;border-radius:1px;transform:rotate(-24deg);pointer-events:none}
   .ctl.warn .dot{background:#d29922}
   .ctl .gear{display:inline-flex;align-items:center;justify-content:center;width:14px;height:14px;border-radius:3px;flex-shrink:0}
   .ctl .gear svg{width:12px;height:12px;fill:#8b949e}
@@ -99,6 +104,9 @@ function pushState() {
     screenshare: { on: screensharing, connected: screenshareConnected },
     screencam: screenCam,
     captureReady: captureReady,
+    keepAlive: { on: kaIntent, duration: keepAliveDuration },
+    blockFullscreen: blockFullscreen,
+    zoom: zoomPercent,
   };
   tabBarView.webContents.send('state', state);
 }
@@ -131,9 +139,11 @@ function createTab(id, url, title) {
     },
   });
   tab.view = view;
+  if (kaIntent && id !== 'main') { tab.kaActive = true; tab.kaStart = Date.now(); }
   tabs.push(tab);
 
   const wc = view.webContents;
+  try { wc.setZoomFactor(zoomPercent / 100); } catch (e) {}
   wc.on('page-title-updated', (e, t) => {
     if (t) { tab.title = t; pushState(); }
   });
@@ -142,11 +152,13 @@ function createTab(id, url, title) {
     pushState();
   });
   const inject = () => {
+    try { wc.setZoomFactor(zoomPercent / 100); } catch (e) {}
     if (!mediaHook) return;
     const opts = JSON.stringify(screenCamSettings);
     wc.executeJavaScript(mediaHook).then(() => {
       return wc.executeJavaScript(
-        'window.__workeeSetScreenCam && window.__workeeSetScreenCam(' + (screenCam ? 'true' : 'false') + ', ' + opts + ')'
+        'window.__workeeSetScreenCam && window.__workeeSetScreenCam(' + (screenCam ? 'true' : 'false') + ', ' + opts + ');' +
+        'window.__workeeSetBlockFullscreen && window.__workeeSetBlockFullscreen(' + (blockFullscreen ? 'true' : 'false') + ')'
       );
     }).catch(() => {});
   };
@@ -203,6 +215,49 @@ function stopScreenShare() {
   if (screenshareWindow) screenshareWindow.close();
 }
 
+function fmtRemaining(ms) {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const min = Math.floor(total / 60);
+  const sec = total % 60;
+  return min > 0 ? (min + 'm ' + sec + 's') : (sec + 's');
+}
+
+function sendHarmlessKey(wc) {
+  if (!wc || wc.isDestroyed()) return;
+  const tab = tabForWebContents(wc);
+  const name = tab ? (tab.title || tab.id) : 'tab';
+  const remaining = tab ? (keepAliveDuration * 60 * 1000 - (Date.now() - (tab.kaStart || Date.now()))) : 0;
+  try {
+    if (typeof wc.executeJavaScript === 'function') {
+      const p = wc.executeJavaScript('window.__workeeMarkKA && window.__workeeMarkKA()');
+      if (p && typeof p.catch === 'function') p.catch(function () {});
+    }
+    if (typeof wc.sendInputEvent === 'function') {
+      const okDown = safeInput(wc, { type: 'keyDown', keyCode: 'Control', code: 'ControlLeft', key: 'Control', modifiers: [] });
+      const okUp = safeInput(wc, { type: 'keyUp', keyCode: 'Control', code: 'ControlLeft', key: 'Control', modifiers: [] });
+      console.log('[keep-alive] nudge (Control) sent to ' + name + ' at ' + new Date().toLocaleTimeString() + ' (' + fmtRemaining(remaining) + ' left until wake-up ends)');
+    } else {
+      console.warn('[keep-alive] sendInputEvent unavailable for ' + name);
+    }
+  } catch (e) {
+    console.warn('[keep-alive] nudge error for ' + name + ':\n' + ((e && e.stack) || (e && e.message) || e));
+  }
+}
+
+function safeInput(wc, evt) {
+  try {
+    const r = wc.sendInputEvent(evt);
+    if (r && typeof r.catch === 'function') {
+      r.catch(function (e) { console.warn('[keep-alive] ' + evt.type + ' failed:\n' + ((e && e.stack) || (e && e.message) || e)); });
+      return true;
+    }
+    return r;
+  } catch (e) {
+    console.warn('[keep-alive] ' + evt.type + ' threw:\n' + ((e && e.stack) || (e && e.message) || e));
+    return false;
+  }
+}
+
 function applyScreenCam() {
   const opts = JSON.stringify(screenCamSettings);
   tabs.forEach(t => {
@@ -210,6 +265,21 @@ function applyScreenCam() {
       'window.__workeeSetScreenCam && window.__workeeSetScreenCam(' + (screenCam ? 'true' : 'false') + ', ' + opts + ')'
     ).catch(() => {});
   });
+}
+
+function applyBlockFullscreen() {
+  tabs.forEach(t => {
+    t.view.webContents.executeJavaScript(
+      'window.__workeeSetBlockFullscreen && window.__workeeSetBlockFullscreen(' + (blockFullscreen ? 'true' : 'false') + ')'
+    ).catch(() => {});
+  });
+}
+
+function toggleBlockFullscreen() {
+  blockFullscreen = !blockFullscreen;
+  store.set('blockFullscreen', blockFullscreen);
+  applyBlockFullscreen();
+  pushState();
 }
 
 function setScreenCamSettings(width, height, fps) {
@@ -225,6 +295,20 @@ function setScreenCamSmooth(smooth) {
   screenCamSettings.smooth = smooth;
   store.set('screenCamSettings', screenCamSettings);
   applyScreenCam();
+  pushState();
+}
+
+function applyZoom() {
+  const f = zoomPercent / 100;
+  tabs.forEach(t => {
+    try { t.view.webContents.setZoomFactor(f); } catch (e) {}
+  });
+}
+
+function setZoomPercent(p) {
+  zoomPercent = Math.max(80, Math.min(200, p));
+  store.set('zoomFactor', zoomPercent);
+  applyZoom();
   pushState();
 }
 
@@ -332,6 +416,9 @@ app.whenReady().then(function() {
   store.init(app.getPath('userData'));
   screenCamSettings = store.get('screenCamSettings', { width: 1280, height: 720, fps: 30, smooth: 0 });
   if (screenCamSettings.smooth == null) screenCamSettings.smooth = 0;
+  keepAliveDuration = store.get('keepAliveDuration', 30);
+  blockFullscreen = store.get('blockFullscreen', false);
+  zoomPercent = store.get('zoomFactor', 100);
 
   session.defaultSession.setPermissionRequestHandler(function(_wc, permission, callback) {
     callback(true);
@@ -420,6 +507,80 @@ app.whenReady().then(function() {
     ]);
     menu.popup({ window: mainWindow });
   });
+  ipcMain.on('toggle-keepalive', function() {
+    kaIntent = !kaIntent;
+    tabs.forEach(function(t) {
+      if (t.id === 'main') return;
+      if (kaIntent) { t.kaActive = true; t.kaStart = Date.now(); }
+      else { t.kaActive = false; }
+    });
+    pushState();
+  });
+  ipcMain.on('keepalive-duration', function(_event, duration) {
+    keepAliveDuration = duration;
+    store.set('keepAliveDuration', duration);
+    tabs.forEach(function(t) {
+      if (t.id === 'main' || !t.kaActive) return;
+      t.kaStart = Date.now();
+    });
+    pushState();
+  });
+  ipcMain.on('keepalive-gear', function() {
+    const options = [15, 30, 60, 90, 120];
+    const menu = Menu.buildFromTemplate(options.map(function(d) {
+      return {
+        label: d + ' min',
+        type: 'radio',
+        checked: keepAliveDuration === d,
+        click: function() { ipcMain.emit('keepalive-duration', null, d); },
+      };
+    }));
+    menu.popup({ window: mainWindow });
+  });
+  ipcMain.on('keepalive-input', function(event) {
+    const t = tabForWebContents(event.sender);
+    if (!t || !t.kaActive) return;
+    t.kaStart = Date.now();
+    t.kaResetFlag = true;
+  });
+  ipcMain.on('app-menu', function() {
+    const title = app.getName() || 'AVD Electron';
+    const menu = Menu.buildFromTemplate([
+      {
+        label: 'About ' + title,
+        click: function() {
+          dialog.showMessageBox(mainWindow, {
+            type: 'info',
+            title: 'About ' + title,
+            message: title,
+            detail: 'Version ' + (app.getVersion() || 'unknown'),
+          });
+        },
+      },
+      {
+        type: 'checkbox',
+        label: 'Prevent auto-fullscreen',
+        checked: blockFullscreen,
+        click: function() {
+          toggleBlockFullscreen();
+        },
+      },
+      {
+        label: 'Interface scale',
+        submenu: [80, 90, 100, 110, 125, 150, 175, 200].map(function(p) {
+          return {
+            label: p + '%',
+            type: 'radio',
+            checked: zoomPercent === p,
+            click: function() { setZoomPercent(p); },
+          };
+        }),
+      },
+      { type: 'separator' },
+      { label: 'Quit', click: function() { app.quit(); } },
+    ]);
+    menu.popup({ window: mainWindow });
+  });
   ipcMain.on('close-tab', function(_event, id) {
     const tab = tabs.find(t => t.id === id);
     if (!tab || id === 'main') return;
@@ -436,7 +597,30 @@ app.whenReady().then(function() {
     });
   });
 
+  setInterval(function() {
+    const now = Date.now();
+    const durationMs = keepAliveDuration * 60 * 1000;
+    const activeTabs = [];
+    tabs.forEach(function(t) {
+      if (t.id === 'main' || !t.kaActive) return;
+      if (now - t.kaStart >= durationMs) {
+        t.kaActive = false;
+      } else if (t.kaResetFlag) {
+        const left = durationMs - (now - t.kaStart);
+        console.log('[keep-alive] timer reset by activity on ' + (t.title || t.id) + ': will nudge for ' + fmtRemaining(left) + ' (until ' + new Date(now + left).toLocaleString() + ')');
+        t.kaResetFlag = false;
+        sendHarmlessKey(t.view.webContents);
+        activeTabs.push(t);
+      } else {
+        sendHarmlessKey(t.view.webContents);
+        activeTabs.push(t);
+      }
+    });
+    if (activeTabs.length) pushState();
+  }, 120000);
+
   createWindow();
+  applyZoom();
   checkCapture();
 });
 

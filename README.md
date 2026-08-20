@@ -11,7 +11,24 @@ Worker app that requires a full Chromium engine. Tauri on Linux uses WebKitGTK,
 which cannot load the web client's WASM (blocked by `frame-ancestors` /
 access-control checks), so Electron (Chromium) is used instead.
 
-## Running
+## Install
+
+```bash
+cd avd-electron && npm install && npm run install-app
+```
+
+This runs `electron-packager` to build a standalone Electron (Chromium) binary,
+then installs it to `~/.local/share/workee` and creates:
+- `~/.local/bin/workee` — run from a terminal
+- `~/.local/share/applications/workee.desktop` — menu entry
+
+For a system-wide install:
+
+```bash
+sudo ./install.sh /opt/Workee /usr/local/bin /usr/share/applications
+```
+
+## Running (development)
 
 ```bash
 python launch_electron.py
@@ -23,8 +40,9 @@ or directly:
 cd avd-electron && npm install && npx electron .
 ```
 
-First launch asks you to sign in to Microsoft. Electron's Chromium persists the
-session cookies, so subsequent launches are already authenticated.
+Both launch the Electron (Chromium) app in dev mode. First launch asks you to
+sign in to Microsoft. Electron's Chromium persists the session cookies, so
+subsequent launches are already authenticated.
 
 ## How it works
 
@@ -40,4 +58,5 @@ session cookies, so subsequent launches are already authenticated.
 - `avd-electron/main.js` — Electron main process (window, tabs, popup capture)
 - `avd-electron/preload-tabbar.js` — IPC bridge for tab clicks
 - `avd-electron/package.json` / `package-lock.json` — npm metadata
-- `launch_electron.py` — convenience launcher
+- `avd-electron/install.sh` — build + install to system
+- `launch_electron.py` — convenience dev launcher (sets `GDK_BACKEND=x11`)

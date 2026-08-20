@@ -5,6 +5,8 @@ const MIC = '<svg viewBox="0 0 24 24"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66
 const CAM = '<svg viewBox="0 0 24 24"><path d="M17 10.5V7c0-.55-.45-1-1-1H4c-.55 0-1 .45-1 1v10c0 .55.45 1 1 1h12c.55 0 1-.45 1-1v-3.5l4 4v-11l-4 4z"/></svg>';
 const X = '<svg viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>';
 const GEAR = '<svg viewBox="0 0 24 24"><path d="M19.14 12.94c.04-.3.06-.61.06-.94s-.02-.64-.07-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.61-.22l-2.39.96a7.03 7.03 0 0 0-1.62-.94l-.36-2.54a.5.5 0 0 0-.5-.42h-3.84a.5.5 0 0 0-.5.42l-.36 2.54c-.59.24-1.13.56-1.62.94l-2.39-.96a.5.5 0 0 0-.61.22L2.73 8.84a.5.5 0 0 0 .12.64l2.03 1.58c-.05.3-.07.63-.07.94s.02.64.07.94l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32c.12.22.37.31.61.22l2.39-.96c.49.38 1.03.7 1.62.94l.36 2.54c.05.24.24.42.5.42h3.84c.25 0 .45-.18.49-.42l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.24.09.49 0 .61-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.02-1.58zM12 15.6a3.6 3.6 0 1 1 0-7.2 3.6 3.6 0 0 1 0 7.2z"/></svg>';
+const KA = '<svg viewBox="0 0 24 24"><path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2zm0 18a8 8 0 1 1 8-8 8 8 0 0 1-8 8zm1-13H11v6h6v-2h-4z"/></svg>';
+const DOTS = '<svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>';
 
 function esc(s) {
   return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -41,6 +43,9 @@ function render(state) {
     : 'Use host screen as webcam';
   const outLabel = state.devices.output || 'Speaker';
   const inLabel = state.devices.input || 'Mic';
+  const ka = state.keepAlive || { on: false, duration: 30 };
+  const kaCls = ka.on ? 'on' : '';
+  const kaTitle = ka.on ? 'Keep session active (inactivity: ' + ka.duration + ' min)' : 'Keep session active';
   controlsEl.innerHTML =
     '<div class="ctl ' + spkCls + '" id="spk" title="Speaker: ' + esc(outLabel) + '">' + SPK +
     '<span class="dot"></span><span class="lbl">' + esc(outLabel) + '</span></div>' +
@@ -48,7 +53,11 @@ function render(state) {
     '<span class="dot"></span><span class="lbl">' + esc(inLabel) + '</span></div>' +
     '<div class="ctl ' + camCls + '" id="cam" title="' + esc(camTitle) + '">' + CAM +
     '<span class="dot"></span><span class="lbl">Screen</span>' +
-    '<span class="gear" id="camgear" title="Screen capture settings">' + GEAR + '</span></div>';
+    '<span class="gear" id="camgear" title="Screen capture settings">' + GEAR + '</span></div>' +
+     '<div class="ctl ' + kaCls + '" id="ka" title="' + esc(kaTitle) + '">' + KA +
+     '<span class="dot"></span><span class="lbl">Keep</span>' +
+     '<span class="gear" id="kagear" title="Keep-alive inactivity duration">' + GEAR + '</span></div>' +
+     '<div class="ctl" id="more" title="More (interface scale ' + esc(state.zoom) + '%)">' + DOTS + '</div>';
   document.getElementById('spk').onclick = () => ipcRenderer.send('toggle-speaker');
   document.getElementById('mic').onclick = () => ipcRenderer.send('toggle-mic');
   document.getElementById('cam').onclick = () => ipcRenderer.send('toggle-screencam');
@@ -56,6 +65,12 @@ function render(state) {
     e.stopPropagation();
     ipcRenderer.send('screencam-settings');
   };
+  document.getElementById('ka').onclick = () => ipcRenderer.send('toggle-keepalive');
+  document.getElementById('kagear').onclick = (e) => {
+    e.stopPropagation();
+    ipcRenderer.send('keepalive-gear');
+  };
+  document.getElementById('more').onclick = () => ipcRenderer.send('app-menu');
 }
 
 contextBridge.exposeInMainWorld('api', {
