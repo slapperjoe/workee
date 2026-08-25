@@ -24,9 +24,36 @@ if [ -d "$INSTALL_DIR" ]; then
 fi
 cp -r "$BUILT" "$INSTALL_DIR"
 
+# Place the app icon where the .desktop Icon= entry points to.
+# (electron-packager's --icon is a no-op on Linux; the launcher
+# resolves icons from the .desktop file, never from the ELF.)
+if [ -f "icon.png" ]; then
+  mkdir -p "$INSTALL_DIR/resources"
+  cp "icon.png" "$INSTALL_DIR/resources/icon.png"
+fi
+
 echo "==> Creating symlink in $BIN_LINK_DIR"
 mkdir -p "$BIN_LINK_DIR"
 ln -sf "$INSTALL_DIR/${APP_NAME}" "$BIN_LINK_DIR/${APP_ID}"
+
+# Install a hicolor icon set so the launcher can also resolve
+# Icon=workee by theme name (covers compositor/desktop that prefer
+# the theme lookup over an absolute path).
+if [ -f "icon.png" ]; then
+  ICON_ROOT="${HOME:-/root}/.local/share/icons"
+  install_icon_sizes=(16 32 48 64 128 256 512)
+  for size in "${install_icon_sizes[@]}"; do
+    if [ "$size" -le 256 ]; then
+      dest_dir="$ICON_ROOT/hicolor/${size}x${size}/apps"
+      mkdir -p "$dest_dir"
+      cp "icon.png" "$dest_dir/${APP_ID}.png"
+    else
+      dest_dir="$ICON_ROOT/hicolor/scalable/apps"
+      mkdir -p "$dest_dir"
+      cp "icon.png" "$dest_dir/${APP_ID}.png"
+    fi
+  done
+fi
 
 echo "==> Creating .desktop launcher in $DESKTOP_DIR"
 mkdir -p "$DESKTOP_DIR"
@@ -35,7 +62,7 @@ cat > "$DESKTOP_DIR/${APP_ID}.desktop" <<EOF
 Type=Application
 Name=$APP_NAME
 Exec=$INSTALL_DIR/${APP_NAME}
-Icon=$INSTALL_DIR/resources/icon.png
+Icon=workee
 Terminal=false
 Categories=Utility;
 EOF
