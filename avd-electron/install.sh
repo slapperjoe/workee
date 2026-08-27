@@ -59,6 +59,21 @@ esac
 if [ -f "icon.png" ]; then
   install_icon_sizes=(16 32 48 64 128 256 512)
   hc_dirs=()
+  # Prefer the SVG master so each hicolor slot holds a true per-size render
+  # (crisper at 16/32/48 than the launcher down-scaling one big PNG).
+  # Fall back to plain copies of icon.png when no renderer is available.
+  SVG_RENDERER=""
+  if [ -f "resources/icon.svg" ] && command -v rsvg-convert >/dev/null 2>&1; then
+    SVG_RENDERER="rsvg-convert"
+  fi
+  render_icon() { # $1=dest-file  $2=width/height in px
+    if [ -n "$SVG_RENDERER" ]; then
+      "$SVG_RENDERER" -w "$2" -h "$2" "resources/icon.svg" -o "$1" 2>/dev/null \
+        || cp "icon.png" "$1"
+    else
+      cp "icon.png" "$1"
+    fi
+  }
   for size in "${install_icon_sizes[@]}"; do
     if [ "$size" -le 256 ]; then
       dest_dir="$ICON_ROOT/hicolor/${size}x${size}/apps"
@@ -68,7 +83,7 @@ if [ -f "icon.png" ]; then
       hc_dirs+=("scalable/apps")
     fi
     mkdir -p "$dest_dir"
-    cp "icon.png" "$dest_dir/${APP_ID}.png"
+    render_icon "$dest_dir/${APP_ID}.png" "$size"
   done
 
   # An icon theme engine (Qt/GTK/QuickShell) will not treat a hicolor
@@ -97,6 +112,7 @@ if [ -f "icon.png" ]; then
           ;;
         *)
           base="${d%/apps}"; sz="${base#*/}"
+          sz="${sz%x*}"
           echo ""
           echo "[$d]"
           echo "Size=$sz"
