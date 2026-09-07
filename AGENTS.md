@@ -29,6 +29,10 @@ No test/lint/typecheck command. `package.json` scripts: `start`, `build` (electr
 ## Layout
 
 - `avd-electron/main.js` — main process: window, `BrowserView` tabs, popup capture, media state/IPC
+- `avd-electron/monitor.js` — observe-only event logger (off unless `WORKEE_MONITOR=1`; log path `WORKEE_MONITOR_LOG`, default `$TMPDIR/workee-monitor.log`). Wraps `setWindowOpenHandler` so every popup request + decision is logged; logs navigations, titles, `login` (native auth) events, IPC, console. Debugging aid, no behavior changes.
+- `avd-electron/credentials.js` — encrypted credential store (`userData/credentials.enc`). Prefers Electron `safeStorage` when the OS keyring is usable; otherwise scrypt(host+user NID) → AES-256-GCM, 0600. On this box `safeStorage` reports `basic_text` (plaintext) so the fallback is what's active.
+- `avd-electron/autofill.js` — auto-fill for the MSAL "device service" credential window (opens as a real second `BrowserWindow` when a Cloud PC session needs interactive re-auth; detected by `type==='window'` + `login.microsoftonline.com`). Clicks the work/school tile, fills the password (native setter + input events), submits, watches the VM tab and clicks its "Reconnect" button after the window closes. Also clicks the in-tab "Sign In" on the "Sign in to Cloud PC" interstitial if it lingers 30s. MFA step is always manual (logged).
+- `avd-electron/credentials.html` + `preload-credentials.js` — "VM sign-in credentials…" dialog (email + password, Save/Clear) from the ⋮ app menu; "Auto-fill VM credentials" toggle in the same menu.
 - `avd-electron/preload-tabbar.js` — tab bar renderer: tabs + speaker/mic controls
 - `avd-electron/preload-media.js` — `contextBridge` for `media-hook.js` state reports
 - `avd-electron/media-hook.js` — main-world `getUserMedia` tracker + screen-as-webcam substitution (injected via `executeJavaScript`)
@@ -40,6 +44,10 @@ No test/lint/typecheck command. `package.json` scripts: `start`, `build` (electr
 - Root `README.md` is the only doc; `.gitignore` excludes `node_modules/`, generated `app.html`, and browser/auth artifacts.
 
 ## Gotchas
+
+- **Never run two instances on the same profile.** Profile-lock contention (LevelDB `LOCK` in `~/.config/Workee/IndexedDB/`) makes the RDP WASM core fail (`Internal error opening backing store for indexedDB.open` → `RuntimeError: unreachable` in `librdphtml.wasm` → white VM tab; `Could not open the quota database, resetting` in stdout). `main.js` has a `requestSingleInstanceLock()` guard — don't remove it. When killing stragglers, match the FULL command line (a `--remote-debugging-port` launch won't match `electron \.`).
+- **VM re-auth opens a real second `BrowserWindow`.** When conditional access expires the device-service token (AADSTS70044), the webclient tab gets `#error=interaction_required` and MSAL calls `window.open(about:blank)` (frameName `msal.<client-id>.ms-device-service://…`); the handler allows it (only http URLs become tabs). That window's page: account chooser = two `role=button` tiles (no form), then password page (visible input hydrates after load), then optional MFA (manual). `autofill.js` keys off `getType()==='window'` + `login.microsoftonline.com` so the dashboard's first-run sign-in (a BrowserView) is never touched.
+- **`safeStorage` is `basic_text` (plaintext) on this box.** `credentials.js` therefore falls back to scrypt(host+user) → AES-256-GCM; don't "fix" it to require `safeStorage`.
 
 - Browser profiles and auth state live in user data, not the repo (see `.gitignore`).
 - `launch_electron.py` sets `GDK_BACKEND=x11` (needed on Wayland). **Do NOT force `--ozone-platform=x11` or call `app.disableHardwareAcceleration()`** — on the target setup those caused GPU-process crashes (`exit_code=139`) and then no window at all. The `ozone-platform=wayland` + "Vulkan not compatible" warning is benign; leave it.
