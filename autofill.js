@@ -46,15 +46,19 @@ const POLL_JS = '(function () {' +
   '  var pwdEls = Array.prototype.slice.call(document.querySelectorAll(\'input[type="password"]\')).filter(vis);' +
   '  var btns = Array.prototype.slice.call(document.querySelectorAll("button,[role=button]"));' +
   '  var work = btns.some(function (b) { return vis(b) && /work or school/i.test(b.innerText || ""); });' +
+  '  var links = Array.prototype.slice.call(document.querySelectorAll("a")).filter(vis).map(function (a) { return (a.innerText || "").trim(); });' +
+  '  var maybeLater = links.some(function (t) { return /maybe later/i.test(t); });' +
   '  var page = "unknown";' +
   '  if (/verify your identity|two[- ]step verification|enter the (6[- ]digit )?code|authentication code/i.test(flat)) page = "mfa";' +
   '  else if (pwdEls.length) page = "password";' +
   '  else if (work) page = "chooser";' +
+  '  else if (maybeLater) page = "verify-account";' +
   '  return JSON.stringify({' +
   '    page: page,' +
   '    hasPasswordField: pwdEls.length > 0,' +
   '    workTile: work,' +
   '    mfa: page === "mfa",' +
+  '    verifyAccount: page === "verify-account",' +
   '    title: document.title,' +
   '    body: flat.slice(0, 200)' +
   '  });' +
@@ -67,6 +71,19 @@ const CLICK_WORK_JS = '(function () {' +
   '    if (vis(btns[i]) && /work or school/i.test(btns[i].innerText || "")) { btns[i].click(); return "clicked"; }' +
   '  }' +
   '  return "no-tile";' +
+'})()';
+
+// Post-MFA "Do you want to verify your account?" interstitial: dismiss via
+// the "Maybe later" LINK only. MSAL renders this as an <a>, not a button —
+// querying links (and never buttons) keeps the click unambiguous even if a
+// button shares similar wording.
+const CLICK_MAYBE_LATER_JS = '(function () {' +
+  '  var vis = function (el) { return !!(el && (el.offsetWidth || el.offsetHeight)); };' +
+  '  var links = Array.prototype.slice.call(document.querySelectorAll("a"));' +
+  '  for (var i = 0; i < links.length; i++) {' +
+  '    if (vis(links[i]) && /maybe later/i.test(links[i].innerText || "")) { links[i].click(); return "clicked"; }' +
+  '  }' +
+  '  return "no-link";' +
 '})()';
 
 // Fill password (and email if the page asks for one), then submit.
@@ -248,7 +265,24 @@ async function poll(wc) {
         }).catch(function () {});
       }
     }
-    return; // keep polling: after MFA the window closes on its own
+    return; // keep polling: after MFA the page may become the "verify your
+            // account" interstitial or the window may close on its own
+  }
+
+  if (r.verifyAccount) {
+    // Fresh re-auth: a new MFA step later should re-announce itself.
+    st.mfaNotified = false;
+    st.stage = 'verify-account';
+    if (!st.maybeLaterHandled) {
+      try {
+        const res = await wc.executeJavaScript(CLICK_MAYBE_LATER_JS, true);
+        if (res === 'clicked') {
+          st.maybeLaterHandled = true;
+          log('post-MFA "verify your account" prompt — clicked the "Maybe later" link');
+        }
+      } catch (e) { return; }
+    }
+    return; // keep polling: MSAL finishes and the window closes on its own
   }
 
   if (r.page === 'chooser') {
@@ -305,7 +339,7 @@ function onWindowGone(wc) {
   if (!st) return;
   if (st.timer) clearInterval(st.timer);
   timers.delete(wc.id);
-  const wasActive = ['chooser', 'password-wait', 'submitted', 'mfa', 'manual', 'hydrating'].indexOf(st.stage) >= 0;
+  const wasActive = ['chooser', 'password-wait', 'submitted', 'mfa', 'verify-account', 'manual', 'hydrating'].indexOf(st.stage) >= 0;
   log('credential window closed (was at stage: ' + st.stage + (st.stage === 'submitted' ? ', submitted ' + Math.round((Date.now() - st.submittedAt) / 1000) + 's ago' : '') + ')');
   if (wasActive) scheduleReconnect(st.opener);
 }
@@ -316,7 +350,7 @@ function stop(wc) {
   if (st.timer) clearInterval(st.timer);
   timers.delete(wc.id);
   log('auto-fill disengaged (stage: ' + st.stage + ')');
-  if (st.stage === 'submitted' || st.stage === 'mfa') scheduleReconnect(st.opener);
+  if (st.stage === 'submitted' || st.stage === 'mfa' || st.stage === 'verify-account') scheduleReconnect(st.opener);
 }
 
 // After the credential window goes away, the VM tab may need a manual
@@ -384,3 +418,6 @@ function scheduleInterstitialCheck(wc) {
 }
 
 module.exports = { init, onWebContents, scheduleInterstitialCheck, hasActiveWindow };
+// Probe/action snippets, exposed for smoke tests (see /tmp/test-autofill.js,
+// /tmp/dom-verify-test.js). Not part of the app's runtime API.
+module.exports._test = { POLL_JS, CLICK_WORK_JS, CLICK_MAYBE_LATER_JS, MFA_JS, RECONNECT_JS };
