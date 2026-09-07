@@ -9,7 +9,7 @@ const { app, BrowserWindow, BrowserView, ipcMain, session, desktopCapturer, Menu
 // and the VM tab goes white ("RuntimeError: unreachable" in librdphtml.wasm).
 // The losing process exits; the running one is focused instead.
 if (!app.requestSingleInstanceLock()) {
-  console.log('[workee] another instance is already running \u2014 exiting');
+  console.log('[workee] another instance is already running — exiting');
   process.exit(0);
 }
 app.on('second-instance', function () {
@@ -20,6 +20,7 @@ app.on('second-instance', function () {
     }
   }, 100);
 });
+
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
@@ -27,6 +28,8 @@ const { execSync } = require('child_process');
 const store = require('./store');
 const monitor = require('./monitor');
 monitor.init();
+const credentials = require('./credentials');
+const autofill = require('./autofill');
 
 const AVD_URL = 'https://windows.cloud.microsoft/#/devices';
 
@@ -35,6 +38,9 @@ let tabBarView = null;
 let tabs = [];
 let activeTabId = 'main';
 let tabIdCounter = 0;
+let autoFillCreds = false;
+let credentialsWindow = null;
+const interstitialScheduled = new Set();
 
 let screenshareWindow = null;
 let screensharing = false;
@@ -162,6 +168,13 @@ function createTab(id, url, title) {
   tabs.push(tab);
 
   const wc = view.webContents;
+  if (url.indexOf('/webclient/') >= 0) {
+    tab.isWebclient = true;
+    if (!interstitialScheduled.has(wc.id)) {
+      interstitialScheduled.add(wc.id);
+      autofill.scheduleInterstitialCheck(wc);
+    }
+  }
   try { wc.setZoomFactor(zoomPercent / 100); } catch (e) {}
   wc.on('page-title-updated', (e, t) => {
     if (t) { tab.title = t; pushState(); }
@@ -389,6 +402,36 @@ async function checkCapture() {
   return ready;
 }
 
+function openCredentialsWindow() {
+  if (credentialsWindow && !credentialsWindow.isDestroyed()) {
+    credentialsWindow.show();
+    credentialsWindow.focus();
+    return;
+  }
+  credentialsWindow = new BrowserWindow({
+    width: 420,
+    height: 300,
+    resizable: false,
+    modal: true,
+    parent: mainWindow,
+    title: 'VM sign-in credentials',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload-credentials.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  credentialsWindow.loadFile(path.join(__dirname, 'credentials.html'));
+  credentialsWindow.webContents.on('dom-ready', function() {
+    credentialsWindow.webContents.send('init', {
+      email: store.get('credentialEmail', ''),
+      hasPassword: credentials.available(),
+      backend: credentials.getBackend(),
+    });
+  });
+  credentialsWindow.on('closed', function() { credentialsWindow = null; });
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280,
@@ -420,6 +463,7 @@ function createWindow() {
 }
 
 app.on('web-contents-created', function(_event, wc) {
+  autofill.onWebContents(wc);
   wc.setWindowOpenHandler(function(details) {
     const url = details.url;
     if (url && url.indexOf('http') === 0) {
@@ -438,6 +482,21 @@ app.whenReady().then(function() {
   keepAliveDuration = store.get('keepAliveDuration', 30);
   blockFullscreen = store.get('blockFullscreen', false);
   zoomPercent = store.get('zoomFactor', 100);
+  autoFillCreds = store.get('autoFillCredentials', false);
+
+  credentials.init(app.getPath('userData'));
+  console.log('[credentials] backend: ' + credentials.getBackend());
+  autofill.init({
+    enabled: function() { return autoFillCreds; },
+    getPassword: function() { return credentials.available() ? credentials.load() : null; },
+    getEmail: function() { return store.get('credentialEmail', ''); },
+    getFallbackOpener: function() {
+      const t = activeTab();
+      if (t && t.view && t.isWebclient) return t.view.webContents;
+      for (let i = 0; i < tabs.length; i++) if (tabs[i].isWebclient) return tabs[i].view.webContents;
+      return null;
+    },
+  });
 
   session.defaultSession.setPermissionRequestHandler(function(_wc, permission, callback) {
     callback(true);
@@ -562,6 +621,17 @@ app.whenReady().then(function() {
     t.kaStart = Date.now();
     t.kaResetFlag = true;
   });
+  ipcMain.on('credentials-clear', function() {
+    credentials.clear();
+    store.set('credentialEmail', '');
+  });
+  ipcMain.on('credentials-save', function(_event, d) {
+    if (d && d.password) {
+      credentials.save(d.password);
+    }
+    if (d && d.email != null) store.set('credentialEmail', d.email);
+  });
+
   ipcMain.on('app-menu', function() {
     const title = app.getName() || 'AVD Electron';
     const menu = Menu.buildFromTemplate([
@@ -574,6 +644,20 @@ app.whenReady().then(function() {
             message: title,
             detail: 'Version ' + (app.getVersion() || 'unknown'),
           });
+        },
+      },
+      {
+        label: 'VM sign-in credentials…',
+        click: function() { openCredentialsWindow(); },
+      },
+      {
+        type: 'checkbox',
+        label: 'Auto-fill VM credentials',
+        checked: autoFillCreds,
+        click: function() {
+          autoFillCreds = !autoFillCreds;
+          store.set('autoFillCredentials', autoFillCreds);
+          console.log('[autofill] auto-fill ' + (autoFillCreds ? 'enabled' : 'disabled'));
         },
       },
       {
