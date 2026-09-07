@@ -631,6 +631,9 @@ app.whenReady().then(function() {
     }
     if (d && d.email != null) store.set('credentialEmail', d.email);
   });
+  ipcMain.on('credentials-close', function() {
+    if (credentialsWindow && !credentialsWindow.isDestroyed()) credentialsWindow.close();
+  });
 
   ipcMain.on('app-menu', function() {
     const title = app.getName() || 'AVD Electron';
