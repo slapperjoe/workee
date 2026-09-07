@@ -15,16 +15,16 @@ There is exactly **one** icon asset tracked in git:
 
 | Path                    | Format | Size    | Colors              | Notes |
 |-------------------------|--------|---------|---------------------|-------|
-| `avd-electron/icon.png` | PNG    | 256×256 | 8-bit RGBA (colortype 6), non-interlaced | A blue-gradient glyph on a transparent background (~15.5% transparent, 8px margin on each edge). **Not** a Microsoft logo. |
+| `icon.png` | PNG    | 256×256 | 8-bit RGBA (colortype 6), non-interlaced | A blue-gradient glyph on a transparent background (~15.5% transparent, 8px margin on each edge). **Not** a Microsoft logo. |
 
 That file is the single source for every other icon artifact — `install.sh`
 copies it (without resizing) to each installed location. There are **no**
 `.ico`, `.icns`, `.svg`, multi-size PNG sets, `build/` icon dir, or `resources/`
-icon in the repo. `avd-electron/resources/` and `avd-electron/build/` do not
+icon in the repo. `resources/` and `build/` do not
 exist (both are gitignored).
 
 ### Non-icon SVGs (do not confuse with the app icon)
-`avd-electron/preload-tabbar.js` defines inline SVG glyphs for the tab bar
+`preload-tabbar.js` defines inline SVG glyphs for the tab bar
 (`SPK`, `MIC`, `CAM`, `X`, `GEAR`, `KA`, `DOTS`) and `main.js` inlines the same
 style in the tab-bar HTML. These are UI control icons in the tab bar, not the
 application icon — leave them alone. `screenshare/receiver.html` /
@@ -35,10 +35,10 @@ application icon — leave them alone. `screenshare/receiver.html` /
 ### Build / packaging
 | Ref | Location | What it does | On Linux |
 |-----|----------|--------------|----------|
-| `--icon=icon.png` | `avd-electron/package.json:10` (script `build`) | Passed to electron-packager | **No-op.** Packager only embeds the icon on Windows (`.ico`) and macOS (`.icns`); on Linux the ELF gets no icon. |
-| `--icon=icon.png` | `avd-electron/install.sh:12` | Same packager invocation used by `install-app` | No-op (same reason). |
+| `--icon=icon.png` | `package.json:10` (script `build`) | Passed to electron-packager | **No-op.** Packager only embeds the icon on Windows (`.ico`) and macOS (`.icns`); on Linux the ELF gets no icon. |
+| `--icon=icon.png` | `install.sh:12` | Same packager invocation used by `install-app` | No-op (same reason). |
 
-> Verified: the built app `avd-electron/dist/Workee-linux-x64/resources/`
+> Verified: the built app `dist/Workee-linux-x64/resources/`
 > contains only `app.asar` — no embedded `resources/icon.png`. The `icon.png`
 > is still copied into the asar (it lives in the packaged dir) but nothing in
 > the running app reads it.
@@ -64,7 +64,7 @@ application icon — leave them alone. `screenshare/receiver.html` /
 - `$DESKTOP_DIR/workee.desktop` → `Icon=workee`
 
 All of these are regenerated from the repo `icon.png` on each install, so
-replacing `avd-electron/icon.png` + re-running `install.sh` updates them.
+replacing `icon.png` + re-running `install.sh` updates them.
 
 ## 3. Required formats & sizes per target platform
 
@@ -93,7 +93,7 @@ required for this task.
 
 ## 4. Bottom line for the icon replacement
 
-1. Replace `avd-electron/icon.png` with the new Microsoft-like icon. Use the
+1. Replace `icon.png` with the new Microsoft-like icon. Use the
    1024×1024 PNG from t_fa1a50c7 (or a 512×512 down-scale to keep the file
    small). Keep the RGBA/transparent format so it sits well on any theme.
 2. Re-run `install.sh` (rebuild + reinstall) — it regenerates `resources/`,

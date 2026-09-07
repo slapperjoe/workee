@@ -14,7 +14,7 @@ access-control checks), so Electron (Chromium) is used instead.
 ## Install
 
 ```bash
-cd avd-electron && npm install && npm run install-app
+npm install && npm run install-app
 ```
 
 This runs `electron-packager` to build a standalone Electron (Chromium) binary,
@@ -37,7 +37,7 @@ python launch_electron.py
 or directly:
 
 ```bash
-cd avd-electron && npm install && npx electron .
+npm install && npx electron .
 ```
 
 Both launch the Electron (Chromium) app in dev mode. First launch asks you to
@@ -55,8 +55,9 @@ subsequent launches are already authenticated.
 
 ## Files
 
-- `avd-electron/main.js` — Electron main process (window, tabs, popup capture)
-- `avd-electron/preload-tabbar.js` — IPC bridge for tab clicks
-- `avd-electron/package.json` / `package-lock.json` — npm metadata
-- `avd-electron/install.sh` — build + install to system
+- `main.js` — Electron main process (window, tabs, popup capture, auto-fill wiring)
+- `preload-tabbar.js` — IPC bridge for tab clicks
+- `package.json` / `package-lock.json` — npm metadata
+- `install.sh` — build + install to system
+- `credentials.js` / `credentials.html` / `autofill.js` — encrypted credential store and MS re-auth auto-fill
 - `launch_electron.py` — convenience dev launcher (sets `GDK_BACKEND=x11`)

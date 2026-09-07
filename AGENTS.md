@@ -6,9 +6,9 @@ Electron-only desktop shell for the AVD (Windows 365) web dashboard. No tests, n
 
 ```bash
 python launch_electron.py            # dev: sets GDK_BACKEND=x11 (needed on Wayland)
-cd avd-electron && npm install && npx electron .   # dev; "start" script = "electron ."
-cd avd-electron && npm run install-app            # build + install to system (~/.local)
-cd avd-electron && sudo ./install.sh /opt/Workee /usr/local/bin /usr/share/applications  # system-wide install
+npm install && npx electron .        # dev; "start" script = "electron ."
+npm run install-app                  # build + install to system (~/.local)
+sudo ./install.sh /opt/Workee /usr/local/bin /usr/share/applications  # system-wide install
 ```
 
 No test/lint/typecheck command. `package.json` scripts: `start`, `build` (electron-packager), `install-app` (install.sh).
@@ -28,19 +28,19 @@ No test/lint/typecheck command. `package.json` scripts: `start`, `build` (electr
 
 ## Layout
 
-- `avd-electron/main.js` — main process: window, `BrowserView` tabs, popup capture, media state/IPC
-- `avd-electron/monitor.js` — observe-only event logger (off unless `WORKEE_MONITOR=1`; log path `WORKEE_MONITOR_LOG`, default `$TMPDIR/workee-monitor.log`). Wraps `setWindowOpenHandler` so every popup request + decision is logged; logs navigations, titles, `login` (native auth) events, IPC, console. Debugging aid, no behavior changes.
-- `avd-electron/credentials.js` — encrypted credential store (`userData/credentials.enc`). Prefers Electron `safeStorage` when the OS keyring is usable; otherwise scrypt(host+user NID) → AES-256-GCM, 0600. On this box `safeStorage` reports `basic_text` (plaintext) so the fallback is what's active.
-- `avd-electron/autofill.js` — auto-fill for the MSAL "device service" credential window (opens as a real second `BrowserWindow` when a Cloud PC session needs interactive re-auth; detected by `type==='window'` + `login.microsoftonline.com`). Clicks the work/school tile, fills the password (native setter + input events), submits, watches the VM tab and clicks its "Reconnect" button after the window closes. Also clicks the in-tab "Sign In" on the "Sign in to Cloud PC" interstitial if it lingers 30s. MFA step is always manual (logged).
-- `avd-electron/credentials.html` + `preload-credentials.js` — "VM sign-in credentials…" dialog (email + password, Save/Clear) from the ⋮ app menu; "Auto-fill VM credentials" toggle in the same menu.
-- `avd-electron/preload-tabbar.js` — tab bar renderer: tabs + speaker/mic controls
-- `avd-electron/preload-media.js` — `contextBridge` for `media-hook.js` state reports
-- `avd-electron/media-hook.js` — main-world `getUserMedia` tracker + screen-as-webcam substitution (injected via `executeJavaScript`)
-- `avd-electron/store.js` — tiny JSON settings store (`userData/settings.json`); persists `screenCamSettings` (`{width,height,fps,smooth}`)
+- `main.js` — main process: window, `BrowserView` tabs, popup capture, media state/IPC
+- `monitor.js` — observe-only event logger (off unless `WORKEE_MONITOR=1`; log path `WORKEE_MONITOR_LOG`, default `$TMPDIR/workee-monitor.log`). Wraps `setWindowOpenHandler` so every popup request + decision is logged; logs navigations, titles, `login` (native auth) events, IPC, console. Debugging aid, no behavior changes.
+- `credentials.js` — encrypted credential store (`userData/credentials.enc`). Prefers Electron `safeStorage` when the OS keyring is usable; otherwise scrypt(host+user NID) → AES-256-GCM, 0600. On this box `safeStorage` reports `basic_text` (plaintext) so the fallback is what's active.
+- `autofill.js` — auto-fill for the MSAL "device service" credential window (opens as a real second `BrowserWindow` when a Cloud PC session needs interactive re-auth; detected by `type==='window'` + `login.microsoftonline.com`). Clicks the work/school tile, fills the password (native setter + input events), submits, watches the VM tab and clicks its "Reconnect" button after the window closes. Also clicks the in-tab "Sign In" on the "Sign in to Cloud PC" interstitial if it lingers 30s. MFA step is always manual (logged).
+- `credentials.html` + `preload-credentials.js` — "VM sign-in credentials…" dialog (email + password, Save/Clear) from the ⋮ app menu; "Auto-fill VM credentials" toggle in the same menu.
+- `preload-tabbar.js` — tab bar renderer: tabs + speaker/mic controls
+- `preload-media.js` — `contextBridge` for `media-hook.js` state reports
+- `media-hook.js` — main-world `getUserMedia` tracker + screen-as-webcam substitution (injected via `executeJavaScript`)
+- `store.js` — tiny JSON settings store (`userData/settings.json`); persists `screenCamSettings` (`{width,height,fps,smooth}`)
 - `launch_electron.py` — launcher (sets `GDK_BACKEND=x11`)
-- `avd-electron/install.sh` — build + install to system (copies to `--install-dir`, symlinks to `--bin-dir`, writes `.desktop` to `--desktop-dir`)
+- `install.sh` — build + install to system (copies to `--install-dir`, symlinks to `--bin-dir`, writes `.desktop` to `--desktop-dir`)
 - `screenshare/` — standalone WebRTC screen-share: `signaling-server.js` (Node `ws`, runs in the VM, also serves `receiver.html`), `receiver.html` (VM side)
-- `avd-electron/screenshare-capture.html` + `preload-screenshare.js` — host side: hidden window does `getDisplayMedia` → WebRTC → signaling
+- `screenshare-capture.html` + `preload-screenshare.js` — host side: hidden window does `getDisplayMedia` → WebRTC → signaling
 - Root `README.md` is the only doc; `.gitignore` excludes `node_modules/`, generated `app.html`, and browser/auth artifacts.
 
 ## Gotchas
