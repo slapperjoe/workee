@@ -8,6 +8,8 @@ const fs = require('fs');
 const os = require('os');
 const { execSync } = require('child_process');
 const store = require('./store');
+const monitor = require('./monitor');
+monitor.init();
 
 const AVD_URL = 'https://windows.cloud.microsoft/#/devices';
 
