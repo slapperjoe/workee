@@ -3,6 +3,23 @@ if (process.platform === 'linux' && !process.env.GDK_BACKEND) {
 }
 
 const { app, BrowserWindow, BrowserView, ipcMain, session, desktopCapturer, Menu, screen, dialog } = require('electron');
+
+// Single-instance guard: two processes on the same Chromium profile collide
+// on LevelDB locks; the RDP WASM core then cannot open its IndexedDB store
+// and the VM tab goes white ("RuntimeError: unreachable" in librdphtml.wasm).
+// The losing process exits; the running one is focused instead.
+if (!app.requestSingleInstanceLock()) {
+  console.log('[workee] another instance is already running \u2014 exiting');
+  process.exit(0);
+}
+app.on('second-instance', function () {
+  setTimeout(function () {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.focus();
+    }
+  }, 100);
+});
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
