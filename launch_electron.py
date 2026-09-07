@@ -7,7 +7,7 @@ import subprocess
 import sys
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-ELECTRON_DIR = os.path.join(BASE_DIR, "avd-electron")
+ELECTRON_DIR = BASE_DIR
 
 
 def find_node():
@@ -47,7 +47,7 @@ def main():
         subprocess.run([npx, "electron", "."], cwd=ELECTRON_DIR, env=env)
         return
 
-    print("Could not locate node/npx. Install Node.js and run `npm install` in avd-electron.",
+    print("Could not locate node/npx. Install Node.js and run `npm install` in the repo root.",
           file=sys.stderr)
     sys.exit(1)
 
