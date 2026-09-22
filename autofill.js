@@ -126,6 +126,19 @@ function fillFn(pwd, email) {
   return { acted: done ? 'filled-and-submitted' : 'filled-only', filledEmail: filledEmail };
 }
 
+// Post-MFA SAS step: the window can navigate to
+// /common/SAS/ProcessAuth ("verify it's me" / sign-in-frequency check)
+// showing a "Not now" LINK. Clicking it lets MSAL complete and the window
+// closes. Same link-only targeting as the "Maybe later" click above.
+const NOT_NOW_JS = '(function () {' +
+  '  var vis = function (el) { return !!(el && (el.offsetWidth || el.offsetHeight)); };' +
+  '  var links = Array.prototype.slice.call(document.querySelectorAll("a"));' +
+  '  for (var i = 0; i < links.length; i++) {' +
+  '    if (vis(links[i]) && /not now/i.test(links[i].innerText || "")) { links[i].click(); return "clicked"; }' +
+  '  }' +
+  '  return "no-link";' +
+'})()';
+
 const MFA_JS = '(function () {' +
   '  var vis = function (el) { return !!(el && (el.offsetWidth || el.offsetHeight)); };' +
   '  var out = { title: document.title, url: location.href };' +
@@ -297,6 +310,23 @@ async function poll(wc) {
     return;
   }
 
+  // SAS "verify it's me" step (e.g. /common/SAS/ProcessAuth): dismiss via
+  // the "Not now" link. URL-based detection (not DOM) so it works even
+  // before the client-rendered link has hydrated.
+  if (/\/SAS\//.test(u)) {
+    st.stage = 'sas';
+    if (!st.notNowHandled) {
+      try {
+        const res = await wc.executeJavaScript(NOT_NOW_JS, true);
+        if (res === 'clicked') {
+          st.notNowHandled = true;
+          log('SAS "verify it\'s me" step — clicked the "Not now" link');
+        }
+      } catch (e) { return; }
+    }
+    return; // keep polling: MSAL finishes and the window closes on its own
+  }
+
   if (r.page === 'password') {
     if (st.stage === 'submitted' && Date.now() - st.submittedAt < 5000) return;
     const pwd = cfg.getPassword();
@@ -339,7 +369,7 @@ function onWindowGone(wc) {
   if (!st) return;
   if (st.timer) clearInterval(st.timer);
   timers.delete(wc.id);
-  const wasActive = ['chooser', 'password-wait', 'submitted', 'mfa', 'verify-account', 'manual', 'hydrating'].indexOf(st.stage) >= 0;
+  const wasActive = ['chooser', 'password-wait', 'submitted', 'mfa', 'verify-account', 'sas', 'manual', 'hydrating'].indexOf(st.stage) >= 0;
   log('credential window closed (was at stage: ' + st.stage + (st.stage === 'submitted' ? ', submitted ' + Math.round((Date.now() - st.submittedAt) / 1000) + 's ago' : '') + ')');
   if (wasActive) scheduleReconnect(st.opener);
 }
@@ -350,7 +380,7 @@ function stop(wc) {
   if (st.timer) clearInterval(st.timer);
   timers.delete(wc.id);
   log('auto-fill disengaged (stage: ' + st.stage + ')');
-  if (st.stage === 'submitted' || st.stage === 'mfa' || st.stage === 'verify-account') scheduleReconnect(st.opener);
+  if (st.stage === 'submitted' || st.stage === 'mfa' || st.stage === 'verify-account' || st.stage === 'sas') scheduleReconnect(st.opener);
 }
 
 // After the credential window goes away, the VM tab may need a manual
@@ -420,4 +450,4 @@ function scheduleInterstitialCheck(wc) {
 module.exports = { init, onWebContents, scheduleInterstitialCheck, hasActiveWindow };
 // Probe/action snippets, exposed for smoke tests (see /tmp/test-autofill.js,
 // /tmp/dom-verify-test.js). Not part of the app's runtime API.
-module.exports._test = { POLL_JS, CLICK_WORK_JS, CLICK_MAYBE_LATER_JS, MFA_JS, RECONNECT_JS };
+module.exports._test = { POLL_JS, CLICK_WORK_JS, CLICK_MAYBE_LATER_JS, NOT_NOW_JS, MFA_JS, RECONNECT_JS };
