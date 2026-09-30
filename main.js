@@ -2,6 +2,18 @@ if (process.platform === 'linux' && !process.env.GDK_BACKEND) {
   process.env.GDK_BACKEND = 'x11';
 }
 
+// Guard against EPIPE on stdout/stderr. When the launcher's stdout pipe is
+// closed (e.g. the wrapping interactive shell exits), a plain console.log
+// throws "Error: write EPIPE" as an uncaught main-process exception and
+// Electron pops its error dialog — repeatedly, on every 700ms autofill poll.
+// Swallowing EPIPE keeps logging non-fatal; other stream errors still throw.
+for (const _stream of [process.stdout, process.stderr]) {
+  _stream.on('error', function (err) {
+    if (err && err.code === 'EPIPE') return;
+    throw err;
+  });
+}
+
 const { app, BrowserWindow, BrowserView, ipcMain, session, desktopCapturer, Menu, screen, dialog } = require('electron');
 
 // Single-instance guard: two processes on the same Chromium profile collide

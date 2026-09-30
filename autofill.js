@@ -23,7 +23,14 @@ const timers = new Map(); // wcId -> state
 let cfg = null;
 
 function log(m) {
-  console.log('[autofill] ' + m);
+  // Never let a logging failure (e.g. EPIPE when the launcher's stdout pipe
+  // is closed) propagate: this is called from the 700ms poll loop, and an
+  // uncaught throw in the main process pops Electron's error dialog.
+  try {
+    console.log('[autofill] ' + m);
+  } catch (e) {
+    /* ignore — logging must never break the autofill flow */
+  }
 }
 
 function init(options) {
