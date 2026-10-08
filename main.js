@@ -14,7 +14,7 @@ for (const _stream of [process.stdout, process.stderr]) {
   });
 }
 
-const { app, BrowserWindow, BrowserView, ipcMain, session, desktopCapturer, Menu, screen, dialog } = require('electron');
+const { app, BrowserWindow, BrowserView, ipcMain, session, desktopCapturer, Menu, dialog } = require('electron');
 
 // Single-instance guard: two processes on the same Chromium profile collide
 // on LevelDB locks; the RDP WASM core then cannot open its IndexedDB store
@@ -35,8 +35,6 @@ app.on('second-instance', function () {
 
 const path = require('path');
 const fs = require('fs');
-const os = require('os');
-const { execSync } = require('child_process');
 const store = require('./store');
 const monitor = require('./monitor');
 monitor.init();
@@ -57,9 +55,6 @@ const interstitialScheduled = new Set();
 let screenshareWindow = null;
 let screensharing = false;
 let screenshareConnected = false;
-let screenCam = false;
-let screenCamSettings = { width: 1280, height: 720, fps: 30, smooth: 0 };
-let captureReady = false;
 let keepAliveDuration = 30;
 let kaIntent = false;
 let blockFullscreen = false;
@@ -139,8 +134,6 @@ function pushState() {
     videoSource: t ? t.videoSource : null,
     devices: { input: t ? t.inputLabel : '', output: t ? t.outputLabel : '' },
     screenshare: { on: screensharing, connected: screenshareConnected },
-    screencam: screenCam,
-    captureReady: captureReady,
     keepAlive: { on: kaIntent, duration: keepAliveDuration },
     blockFullscreen: blockFullscreen,
     zoom: zoomPercent,
@@ -198,10 +191,8 @@ function createTab(id, url, title) {
   const inject = () => {
     try { wc.setZoomFactor(zoomPercent / 100); } catch (e) {}
     if (!mediaHook) return;
-    const opts = JSON.stringify(screenCamSettings);
     wc.executeJavaScript(mediaHook).then(() => {
       return wc.executeJavaScript(
-        'window.__workeeSetScreenCam && window.__workeeSetScreenCam(' + (screenCam ? 'true' : 'false') + ', ' + opts + ');' +
         'window.__workeeSetBlockFullscreen && window.__workeeSetBlockFullscreen(' + (blockFullscreen ? 'true' : 'false') + ')'
       );
     }).catch(() => {});
@@ -302,15 +293,6 @@ function safeInput(wc, evt) {
   }
 }
 
-function applyScreenCam() {
-  const opts = JSON.stringify(screenCamSettings);
-  tabs.forEach(t => {
-    t.view.webContents.executeJavaScript(
-      'window.__workeeSetScreenCam && window.__workeeSetScreenCam(' + (screenCam ? 'true' : 'false') + ', ' + opts + ')'
-    ).catch(() => {});
-  });
-}
-
 function applyBlockFullscreen() {
   tabs.forEach(t => {
     t.view.webContents.executeJavaScript(
@@ -326,22 +308,6 @@ function toggleBlockFullscreen() {
   pushState();
 }
 
-function setScreenCamSettings(width, height, fps) {
-  screenCamSettings.width = width;
-  screenCamSettings.height = height;
-  screenCamSettings.fps = fps;
-  store.set('screenCamSettings', screenCamSettings);
-  applyScreenCam();
-  pushState();
-}
-
-function setScreenCamSmooth(smooth) {
-  screenCamSettings.smooth = smooth;
-  store.set('screenCamSettings', screenCamSettings);
-  applyScreenCam();
-  pushState();
-}
-
 function applyZoom() {
   const f = zoomPercent / 100;
   tabs.forEach(t => {
@@ -354,64 +320,6 @@ function setZoomPercent(p) {
   store.set('zoomFactor', zoomPercent);
   applyZoom();
   pushState();
-}
-
-function detectOutputName() {
-  try {
-    const displays = screen.getAllDisplays();
-    if (displays && displays.length) {
-      const label = displays[0].label;
-      if (label && /^[A-Za-z0-9]+-\d+$/.test(label)) return label;
-    }
-  } catch (e) {}
-  try {
-    const out = execSync('dms randr', { encoding: 'utf8', timeout: 3000 });
-    const m = out.match(/^(\S+)\s*\(/m);
-    if (m) return m[1];
-  } catch (e) {}
-  try {
-    const out = execSync('wlr-randr', { encoding: 'utf8', timeout: 3000 });
-    const m = out.match(/^([A-Za-z0-9-]+)\s/m);
-    if (m) return m[1];
-  } catch (e) {}
-  return null;
-}
-
-function configureWlrPortal() {
-  const configPath = path.join(os.homedir(), '.config', 'xdg-desktop-portal-wlr', 'config');
-  const outputName = detectOutputName();
-  if (!outputName) return false;
-  try {
-    fs.accessSync(configPath);
-    return false;
-  } catch (e) {}
-  const content = '[screencast]\noutput_name=' + outputName + '\nchooser_type=none\n';
-  try {
-    fs.mkdirSync(path.dirname(configPath), { recursive: true });
-    fs.writeFileSync(configPath, content);
-  } catch (e) {
-    return false;
-  }
-  try { execSync('systemctl --user restart xdg-desktop-portal-wlr', { timeout: 5000 }); } catch (e) {}
-  return true;
-}
-
-async function checkCapture() {
-  let ready = false;
-  try {
-    const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 0, height: 0 } });
-    ready = sources.length > 0;
-  } catch (e) {}
-  if (!ready && process.platform === 'linux' && process.env.XDG_SESSION_TYPE === 'wayland') {
-    configureWlrPortal();
-    try {
-      const sources = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 0, height: 0 } });
-      ready = sources.length > 0;
-    } catch (e) {}
-  }
-  captureReady = ready;
-  pushState();
-  return ready;
 }
 
 function openCredentialsWindow() {
@@ -489,8 +397,6 @@ app.on('web-contents-created', function(_event, wc) {
 app.whenReady().then(function() {
   Menu.setApplicationMenu(null);
   store.init(app.getPath('userData'));
-  screenCamSettings = store.get('screenCamSettings', { width: 1280, height: 720, fps: 30, smooth: 0 });
-  if (screenCamSettings.smooth == null) screenCamSettings.smooth = 0;
   keepAliveDuration = store.get('keepAliveDuration', 30);
   blockFullscreen = store.get('blockFullscreen', false);
   zoomPercent = store.get('zoomFactor', 100);
@@ -570,32 +476,6 @@ app.whenReady().then(function() {
   ipcMain.on('toggle-screenshare', function() {
     if (screensharing) stopScreenShare();
     else startScreenShare();
-  });
-  ipcMain.on('toggle-screencam', function() {
-    screenCam = !screenCam;
-    applyScreenCam();
-    pushState();
-  });
-  ipcMain.on('screencam-settings', function() {
-    const s = screenCamSettings;
-    const menu = Menu.buildFromTemplate([
-      { label: 'Resolution', submenu: [
-        { label: '1920 \u00d7 1080', type: 'radio', checked: s.width === 1920, click: function() { setScreenCamSettings(1920, 1080, s.fps); } },
-        { label: '1280 \u00d7 720', type: 'radio', checked: s.width === 1280, click: function() { setScreenCamSettings(1280, 720, s.fps); } },
-        { label: '960 \u00d7 540', type: 'radio', checked: s.width === 960, click: function() { setScreenCamSettings(960, 540, s.fps); } },
-        { label: '640 \u00d7 360', type: 'radio', checked: s.width === 640, click: function() { setScreenCamSettings(640, 360, s.fps); } },
-      ]},
-      { label: 'Frame rate', submenu: [
-        { label: '30 fps', type: 'radio', checked: s.fps === 30, click: function() { setScreenCamSettings(s.width, s.height, 30); } },
-        { label: '15 fps', type: 'radio', checked: s.fps === 15, click: function() { setScreenCamSettings(s.width, s.height, 15); } },
-      ]},
-      { label: 'Smoothing', submenu: [
-        { label: 'Off', type: 'radio', checked: s.smooth === 0, click: function() { setScreenCamSmooth(0); } },
-        { label: 'Light', type: 'radio', checked: s.smooth === 1, click: function() { setScreenCamSmooth(1); } },
-        { label: 'Strong', type: 'radio', checked: s.smooth === 2, click: function() { setScreenCamSmooth(2); } },
-      ]},
-    ]);
-    menu.popup({ window: mainWindow });
   });
   ipcMain.on('toggle-keepalive', function() {
     kaIntent = !kaIntent;
@@ -739,7 +619,6 @@ app.whenReady().then(function() {
 
   createWindow();
   applyZoom();
-  checkCapture();
 });
 
 app.on('window-all-closed', function() { app.quit(); });

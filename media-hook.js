@@ -4,10 +4,7 @@
 
   var tracks = [];
   var deviceMap = {};
-  var obsDeviceId = null;
-  var screenCam = false;
   var micEnabled = true;
-  var camOpts = { width: 1280, height: 720, fps: 30, smooth: 0 };
 
   function report() {
     var audio = false;
@@ -29,7 +26,7 @@
         if (!videoDevice && t.getSettings) {
           var s2 = t.getSettings();
           videoDevice = (s2 && deviceMap[s2.deviceId]) || null;
-          videoSource = (s2 && s2.deviceId === obsDeviceId) ? 'obs' : 'camera';
+          videoSource = 'camera';
         }
       }
     }
@@ -42,14 +39,10 @@
     if (!navigator.mediaDevices || !navigator.mediaDevices.enumerateDevices) return;
     navigator.mediaDevices.enumerateDevices().then(function (devs) {
       deviceMap = {};
-      obsDeviceId = null;
       var out = { audioinput: null, audiooutput: null, videoinput: null };
       for (var i = 0; i < devs.length; i++) {
         var d = devs[i];
         if (d.label) deviceMap[d.deviceId] = d.label;
-        if (d.kind === 'videoinput' && d.label && /obs|virtual camera|v4l2loopback|hardware isp camera/i.test(d.label) && !obsDeviceId) {
-          obsDeviceId = d.deviceId;
-        }
         if (d.kind === 'audioinput' && !out.audioinput && d.label) out.audioinput = d.label;
         if (d.kind === 'audiooutput' && !out.audiooutput && d.label) out.audiooutput = d.label;
         if (d.kind === 'videoinput' && !out.videoinput && d.label) out.videoinput = d.label;
@@ -79,46 +72,14 @@
     report();
   };
 
-  window.__workeeSetScreenCam = function (enabled, opts) {
-    screenCam = !!enabled;
-    if (opts && opts.width && opts.height && opts.fps) {
-      camOpts = {
-        width: opts.width,
-        height: opts.height,
-        fps: opts.fps,
-        smooth: opts.smooth || 0,
-      };
-    }
-  };
-
-
+  // Wrap getUserMedia so the tab bar can report which mic/camera the page
+  // has live. (No device substitution here — the page always gets the real
+  // device; if you want the host screen as the "webcam", run OBS and pick
+  // its virtual camera.)
   var md = navigator.mediaDevices;
   if (md && md.getUserMedia) {
     var orig = md.getUserMedia.bind(md);
-
     md.getUserMedia = function (constraints) {
-      var wantVideo = !!(constraints && constraints.video);
-      var wantAudio = !!(constraints && constraints.audio);
-
-      if (screenCam && wantVideo) {
-        if (!obsDeviceId) {
-          return Promise.reject(new Error('AVD Electron: screen-cam requested but OBS virtual camera is not available'));
-        }
-        var obsVideo = {};
-        if (constraints.video !== true) {
-          for (var key in constraints.video) obsVideo[key] = constraints.video[key];
-        }
-        obsVideo.deviceId = { exact: obsDeviceId };
-        return orig({ audio: constraints.audio, video: obsVideo }).then(function (stream) {
-          track(stream);
-          report();
-          updateDevices();
-          return stream;
-        }).catch(function () {
-          return Promise.reject(new Error('AVD Electron: OBS virtual camera is not available'));
-        });
-      }
-
       return orig(constraints).then(function (stream) {
         track(stream);
         report();
