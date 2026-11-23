@@ -275,7 +275,9 @@ function hideTabBar() {
 }
 
 function pushState() {
-  if (!tabBarView) return;
+  // The view object survives its own destruction, so checking it is not enough: during
+  // shutdown a closed-window handler can call pushState after the webContents is gone.
+  if (!tabBarView || !tabBarView.webContents || tabBarView.webContents.isDestroyed()) return;
   const t = activeTab();
   const state = {
     tabs: tabs.map(x => ({ id: x.id, title: x.title, active: x.id === activeTabId })),
