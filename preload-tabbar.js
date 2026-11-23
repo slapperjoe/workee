@@ -41,6 +41,8 @@ function render(state) {
   const kaCls = ka.on ? 'on' : '';
   const kaTitle = ka.on ? 'Keep session active (inactivity: ' + ka.duration + ' min)' : 'Keep session active';
   controlsEl.innerHTML =
+    '<div class="ctl" id="mvleft" title="Move the focused window to the left monitor">' + ARROW_L + '</div>' +
+    '<div class="ctl" id="mvright" title="Move the focused window to the right monitor">' + ARROW_R + '</div>' +
     '<div class="ctl ' + spkCls + '" id="spk" title="Speaker: ' + esc(outLabel) + '">' + SPK +
     '<span class="dot"></span><span class="lbl">' + esc(outLabel) + '</span></div>' +
     '<div class="ctl ' + micCls + '" id="mic" title="Microphone: ' + esc(inLabel) + '">' + MIC +
@@ -56,6 +58,8 @@ function render(state) {
     e.stopPropagation();
     ipcRenderer.send('keepalive-gear');
   };
+  document.getElementById('mvleft').onclick = () => ipcRenderer.send('move-focus', 'left');
+  document.getElementById('mvright').onclick = () => ipcRenderer.send('move-focus', 'right');
   document.getElementById('more').onclick = () => ipcRenderer.send('app-menu');
 }
 
@@ -68,8 +72,15 @@ contextBridge.exposeInMainWorld('api', {
 // the bar is auto-hidden. Pointerenter/pointerleave on the root element is the
 // hover on that document's whole area. The preload runs before the page is parsed,
 // so the branch is resolved on DOMContentLoaded, not at load time.
+// The guest moves a window between monitors with Super+Shift+Arrow; these buttons inject that
+// combination, which the host compositor would otherwise swallow.
+const ARROW_L = '<svg viewBox="0 0 24 24"><path d="M15 4L7 12l8 8z"/></svg>';
+const ARROW_R = '<svg viewBox="0 0 24 24"><path d="M9 4l8 8-8 8z"/></svg>';
 
 const DWELL_MS = 1000;
+
+// In the flag the two arrows are the only controls: the bar is hidden by definition there.
+// Clicks must not bubble to the flag itself, whose click shows the bar.
 
 function setup() {
   const flagEl = document.getElementById('flag');
@@ -87,6 +98,12 @@ function setup() {
       if (dwell) { clearTimeout(dwell); dwell = null; }
     });
     flagEl.addEventListener('click', function () { ipcRenderer.send('tabbar-show'); });
+    flagEl.querySelectorAll('.mv').forEach(function (el) {
+      el.addEventListener('click', function (e) {
+        e.stopPropagation();
+        ipcRenderer.send('move-focus', el.getAttribute('data-dir'));
+      });
+    });
   } else if (document.getElementById('tabs')) {
     root.addEventListener('pointerenter', function () { ipcRenderer.send('tabbar-enter'); });
     root.addEventListener('pointerleave', function () { ipcRenderer.send('tabbar-leave'); });

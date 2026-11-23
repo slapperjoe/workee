@@ -62,6 +62,8 @@ let zoomPercent = 100;
 // Auto-hide tab bar: when enabled the bar collapses to a small pennant pinned in
 // the top-left corner; dwelling on it re-opens the bar, and the pointer leaving
 // the bar collapses it again after GRACE_MS.
+// Widened for the two move arrows; the flag is the only place those controls exist when the bar
+// is auto-hidden, so they have to fit here.
 const FLAG_W = 86;
 const FLAG_H = 18;
 const GRACE_MS = 3000;
@@ -215,6 +217,8 @@ const flagContent = `<!DOCTYPE html><html><head><style>
   #flag:hover{background:#21262d}
   #flag:hover svg{fill:#c9d1d9}
   #flag:hover .dot{background:#58a6ff}
+  #flag .mv{font-size:13px;line-height:1;color:#8b949e;cursor:pointer;padding:0 3px}
+  #flag .mv:hover{color:#58a6ff}
   </style></head><body>
   <div id="flag" title="Tab bar hidden - hover here to show it"><svg viewBox="0 0 24 24"><path d="M5 2h2v20H5z"/><path d="M7 2l11 4-11 4z"/></svg><span class="dot"></span><span class="mv" data-dir="left" title="Move the focused window to the left monitor">&#9664;</span><span class="mv" data-dir="right" title="Move the focused window to the right monitor">&#9654;</span></div>
   </body></html>`;
@@ -668,6 +672,38 @@ app.whenReady().then(function() {
     desktopCapturer.getSources({ types: ['screen'] }).then(function(sources) {
       callback({ video: sources[0] });
     }).catch(function() { callback({}); });
+  });
+
+  // Send Super+Shift+Arrow to the guest, which is how Windows moves the focused window to the
+  // neighbouring monitor. The host compositor owns the Super key, so the app has to inject it.
+  // sendInputEvent produces a trusted key event but with no key identity (probe24), so the only
+  // usable form is a synthetic KeyboardEvent - that reaches window and document listeners
+  // (probe25); whether the WASM core acts on an untrusted event is the open question.
+  ipcMain.on('move-focus', function(_event, dir) {
+    const side = dir === 'left' ? 'ArrowLeft' : 'ArrowRight';
+    // Target the tab we are looking at - that page owns virtual monitor 0 and is the one
+    // the client moves a guest window relative to. The second window can get its own
+    // arrows later.
+    let wc = null, label = '';
+    const t = activeTab();
+    if (t && t.view) { wc = t.view.webContents; label = 'tab ' + t.id; }
+    if (!wc) {
+      const w = BrowserWindow.getFocusedWindow();
+      if (w && !w.isDestroyed()) { wc = w.webContents; label = 'window ' + (w.getTitle() || 'untitled'); }
+    }
+    if (!wc) return;
+    const js = "(() => { const t = document.activeElement || document;" +
+      "const mk = (type, key, code, kc) => { const e = new KeyboardEvent(type, {key: key, code: code, shiftKey: true, metaKey: true, bubbles: true});" +
+      "if (kc) { Object.defineProperty(e, 'keyCode', {value: kc}); Object.defineProperty(e, 'which', {value: kc}); } return e; };" +
+      "t.dispatchEvent(mk('keydown', 'Meta', 'Meta', 91));" +
+      "t.dispatchEvent(mk('keydown', 'Shift', 'ShiftLeft', 16));" +
+      "t.dispatchEvent(mk('keydown', '" + side + "', '" + side + "', " + (side === 'ArrowLeft' ? 37 : 39) + "));" +
+      "t.dispatchEvent(mk('keyup', '" + side + "', '" + side + "', " + (side === 'ArrowLeft' ? 37 : 39) + "));" +
+      "t.dispatchEvent(mk('keyup', 'Shift', 'ShiftLeft', 16));" +
+      "t.dispatchEvent(mk('keyup', 'Meta', 'Meta', 91));" +
+      "document.body.setAttribute('data-workee-move', '" + side + "'); })()";
+    console.log('[move] Super+Shift+' + side + ' -> ' + label);
+    try { wc.executeJavaScript(js, true); } catch (e) { console.log('[move] failed: ' + e.message); }
   });
 
   ipcMain.on('switch-tab', function(_event, id) { switchTab(id); });
