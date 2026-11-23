@@ -629,6 +629,7 @@ app.whenReady().then(function() {
   Menu.setApplicationMenu(null);
   store.init(app.getPath('userData'));
   keepAliveDuration = store.get('keepAliveDuration', 30);
+  kaIntent = store.get('keepAliveOn', false);
   blockFullscreen = store.get('blockFullscreen', false);
   autoHideTabBar = store.get('autoHideTabBar', false);
   barHidden = autoHideTabBar;
@@ -759,6 +760,7 @@ app.whenReady().then(function() {
   });
   ipcMain.on('toggle-keepalive', function() {
     kaIntent = !kaIntent;
+    store.set('keepAliveOn', kaIntent);
     tabs.forEach(function(t) {
       if (t.id === 'main') return;
       if (kaIntent) { t.kaActive = true; t.kaStart = Date.now(); }
