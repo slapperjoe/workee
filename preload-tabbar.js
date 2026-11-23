@@ -13,6 +13,7 @@ function esc(s) {
 
 function render(state) {
   const tabsEl = document.getElementById('tabs');
+  if (!tabsEl) return;
   tabsEl.innerHTML = state.tabs.map(t => {
     const name = t.title || 'VM';
     const short = name.length > 20 ? name.substring(0, 18) + '..' : name;
@@ -62,6 +63,41 @@ contextBridge.exposeInMainWorld('api', {
   switchTab: (id) => ipcRenderer.send('switch-tab', id),
   onState: (cb) => ipcRenderer.on('state', (_e, s) => cb(s)),
 });
+
+// Two documents share this preload: the bar itself, and the corner flag shown when
+// the bar is auto-hidden. Pointerenter/pointerleave on the root element is the
+// hover on that document's whole area. The preload runs before the page is parsed,
+// so the branch is resolved on DOMContentLoaded, not at load time.
+
+const DWELL_MS = 1000;
+
+function setup() {
+  const flagEl = document.getElementById('flag');
+  const root = document.documentElement;
+  if (flagEl) {
+    let dwell = null;
+    root.addEventListener('pointerenter', function () {
+      if (dwell) clearTimeout(dwell);
+      dwell = setTimeout(function () {
+        dwell = null;
+        ipcRenderer.send('tabbar-show');
+      }, DWELL_MS);
+    });
+    root.addEventListener('pointerleave', function () {
+      if (dwell) { clearTimeout(dwell); dwell = null; }
+    });
+    flagEl.addEventListener('click', function () { ipcRenderer.send('tabbar-show'); });
+  } else if (document.getElementById('tabs')) {
+    root.addEventListener('pointerenter', function () { ipcRenderer.send('tabbar-enter'); });
+    root.addEventListener('pointerleave', function () { ipcRenderer.send('tabbar-leave'); });
+  }
+}
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', setup);
+} else {
+  setup();
+}
 
 ipcRenderer.on('state', (_e, s) => render(s));
 ipcRenderer.send('get-state');

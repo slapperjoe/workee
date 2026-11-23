@@ -59,6 +59,16 @@ let keepAliveDuration = 30;
 let kaIntent = false;
 let blockFullscreen = false;
 let zoomPercent = 100;
+// Auto-hide tab bar: when enabled the bar collapses to a small pennant pinned in
+// the top-left corner; dwelling on it re-opens the bar, and the pointer leaving
+// the bar collapses it again after GRACE_MS.
+const FLAG_W = 86;
+const FLAG_H = 18;
+const GRACE_MS = 3000;
+let autoHideTabBar = false;
+let barHidden = false;
+let flagView = null;
+let collapseTimer = null;
 const signalingUrl = process.env.SCREENSHARE_SIGNALING_URL || 'ws://localhost:8080';
 
 let mediaHook = '';
@@ -195,6 +205,20 @@ const tabBarContent = `<!DOCTYPE html><html><head><style>
   </div>
   </body></html>`;
 
+// The corner handle shown when the bar is auto-hidden. The pennant itself is the
+// only thing in the document, so a pointerenter on the page == a hover on the flag.
+const flagContent = `<!DOCTYPE html><html><head><style>
+  html,body{margin:0;padding:0;height:100%;background:#161b22;overflow:hidden}
+  #flag{display:flex;align-items:center;gap:5px;box-sizing:border-box;height:100%;padding:0 5px;cursor:pointer;border-right:1px solid #30363d;border-bottom:1px solid #30363d;border-radius:0 5px 0 0}
+  #flag svg{width:13px;height:13px;fill:#8b949e}
+  #flag .dot{width:6px;height:6px;border-radius:50%;background:#30363d}
+  #flag:hover{background:#21262d}
+  #flag:hover svg{fill:#c9d1d9}
+  #flag:hover .dot{background:#58a6ff}
+  </style></head><body>
+  <div id="flag" title="Tab bar hidden - hover here to show it"><svg viewBox="0 0 24 24"><path d="M5 2h2v20H5z"/><path d="M7 2l11 4-11 4z"/></svg><span class="dot"></span><span class="mv" data-dir="left" title="Move the focused window to the left monitor">&#9664;</span><span class="mv" data-dir="right" title="Move the focused window to the right monitor">&#9654;</span></div>
+  </body></html>`;
+
 function activeTab() {
   for (let i = 0; i < tabs.length; i++) if (tabs[i].id === activeTabId) return tabs[i];
   return null;
@@ -208,8 +232,20 @@ function tabForWebContents(wc) {
 function layout() {
   if (!mainWindow) return;
   const [w, h] = mainWindow.getSize();
-  const th = 36;
-  if (tabBarView) tabBarView.setBounds({ x: 0, y: 0, width: w, height: th });
+  const hidden = autoHideTabBar && barHidden;
+  const th = hidden ? 0 : 36;
+  if (hidden) {
+    // The flag floats over the page corner, so the tab can use the full height.
+    if (tabBarView) tabBarView.setBounds({ x: 0, y: 0, width: 0, height: 0 });
+    if (flagView) {
+      flagView.setBounds({ x: 0, y: 0, width: FLAG_W, height: FLAG_H });
+      try { mainWindow.setTopBrowserView(flagView); } catch (e) {}
+    }
+  } else {
+    if (tabBarView) tabBarView.setBounds({ x: 0, y: 0, width: w, height: 36 });
+    if (flagView) flagView.setBounds({ x: 0, y: 0, width: 0, height: 0 });
+    try { mainWindow.setTopBrowserView(tabBarView); } catch (e) {}
+  }
   tabs.forEach(t => {
     if (t.id === activeTabId) {
       t.view.setBounds({ x: 0, y: th, width: w, height: h - th });
@@ -217,6 +253,21 @@ function layout() {
       t.view.setBounds({ x: 0, y: th, width: 0, height: 0 });
     }
   });
+}
+
+function showTabBar() {
+  if (collapseTimer) { clearTimeout(collapseTimer); collapseTimer = null; }
+  if (!barHidden) return;
+  barHidden = false;
+  layout();
+  pushState();
+}
+
+function hideTabBar() {
+  if (!autoHideTabBar || barHidden) return;
+  barHidden = true;
+  layout();
+  pushState();
 }
 
 function pushState() {
@@ -478,6 +529,17 @@ function createWindow() {
   tabBarView.webContents.loadURL('data:text/html,' + encodeURIComponent(tabBarContent));
   mainWindow.addBrowserView(tabBarView);
 
+  flagView = new BrowserView({
+    webPreferences: {
+      preload: path.join(__dirname, 'preload-tabbar.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+  flagView.setBackgroundColor('#161b22');
+  flagView.webContents.loadURL('data:text/html,' + encodeURIComponent(flagContent));
+  mainWindow.addBrowserView(flagView);
+
   const mainTab = createTab('main', AVD_URL, 'Dashboard');
   activeTabId = 'main';
   layout();
@@ -564,6 +626,8 @@ app.whenReady().then(function() {
   store.init(app.getPath('userData'));
   keepAliveDuration = store.get('keepAliveDuration', 30);
   blockFullscreen = store.get('blockFullscreen', false);
+  autoHideTabBar = store.get('autoHideTabBar', false);
+  barHidden = autoHideTabBar;
   zoomPercent = store.get('zoomFactor', 100);
   autoFillCreds = store.get('autoFillCredentials', false);
   splitWindowsOn = store.get('splitWindows', false);
@@ -707,6 +771,19 @@ app.whenReady().then(function() {
     if (credentialsWindow && !credentialsWindow.isDestroyed()) credentialsWindow.close();
   });
 
+  ipcMain.on('tabbar-show', function() { showTabBar(); });
+  ipcMain.on('tabbar-enter', function() {
+    if (collapseTimer) { clearTimeout(collapseTimer); collapseTimer = null; }
+  });
+  ipcMain.on('tabbar-leave', function() {
+    if (!autoHideTabBar || barHidden) return;
+    if (collapseTimer) clearTimeout(collapseTimer);
+    collapseTimer = setTimeout(function() {
+      collapseTimer = null;
+      hideTabBar();
+    }, GRACE_MS);
+  });
+
   ipcMain.on('app-menu', function() {
     const title = app.getName() || 'AVD Electron';
     const menu = Menu.buildFromTemplate([
@@ -733,6 +810,18 @@ app.whenReady().then(function() {
           autoFillCreds = !autoFillCreds;
           store.set('autoFillCredentials', autoFillCreds);
           console.log('[autofill] auto-fill ' + (autoFillCreds ? 'enabled' : 'disabled'));
+        },
+      },
+      {
+        type: 'checkbox',
+        label: 'Auto-hide tab bar',
+        checked: autoHideTabBar,
+        click: function() {
+          autoHideTabBar = !autoHideTabBar;
+          store.set('autoHideTabBar', autoHideTabBar);
+          barHidden = autoHideTabBar;
+          layout();
+          pushState();
         },
       },
       {
