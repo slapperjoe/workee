@@ -73,6 +73,34 @@ let flagView = null;
 let collapseTimer = null;
 const signalingUrl = process.env.SCREENSHARE_SIGNALING_URL || 'ws://localhost:8080';
 
+// Main-process errors normally pop Electron's own dialog, whose text cannot be
+// selected or copied. Show ours instead: log it, put it on the clipboard, and keep a
+// Copy button in case the clipboard was busy.
+function reportError(where, err) {
+  const text = String((err && err.stack) || (err && err.message) || err);
+  console.error('[error] ' + where + ': ' + text);
+  try { clipboard.writeText(where + ': ' + text); } catch (e) {}
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  dialog.showMessageBox(mainWindow, {
+    type: 'error',
+    title: 'Error',
+    message: 'Error in ' + where,
+    detail: text + '\n\n(already copied to clipboard)',
+    buttons: ['OK', 'Copy again'],
+    defaultId: 0,
+  }).then(function (result) {
+    if (result.response === 1) {
+      try { clipboard.writeText(where + ': ' + text); } catch (e) {}
+    }
+  }).catch(function () {});
+}
+
+process.on('uncaughtException', function (err) {
+  if (err && err.code === 'EPIPE') return;
+  reportError('uncaught exception', err);
+});
+
+
 let mediaHook = '';
 try {
   mediaHook = fs.readFileSync(path.join(__dirname, 'media-hook.js'), 'utf8');
@@ -226,6 +254,22 @@ const flagContent = `<!DOCTYPE html><html><head><style>
 function activeTab() {
   for (let i = 0; i < tabs.length; i++) if (tabs[i].id === activeTabId) return tabs[i];
   return null;
+}
+
+// Devtools for whichever page has focus: the split window, or the active tab's view.
+// Needed because the client's "please respond to browser permission requests" hint is driven
+// by an internal pending-request counter, and only the page itself can say which call is stuck.
+function openDevtools() {
+  let wc = null;
+  const w = BrowserWindow.getFocusedWindow();
+  if (w && !w.isDestroyed()) wc = w.webContents;
+  if (!wc) {
+    const t = activeTab();
+    if (t && t.view) wc = t.view.webContents;
+  }
+  if (!wc) return;
+  console.log('[devtools] opened for ' + (wc.getTitle() || wc.getURL().slice(0, 60)));
+  wc.openDevTools({ mode: 'detach' });
 }
 
 function tabForWebContents(wc) {
@@ -629,6 +673,10 @@ app.on('browser-window-created', function (_event, w) {
 
 app.whenReady().then(function() {
   Menu.setApplicationMenu(null);
+  // On Wayland a global shortcut can be refused (the compositor owns the key), so record whether
+  // it was actually taken. The menu item below is the reliable path.
+  const ok = globalShortcut.register('CommandOrControl+Shift+I', openDevtools);
+  console.log('[devtools] shortcut ' + (ok ? 'registered' : 'NOT registered - use the menu item'));
   store.init(app.getPath('userData'));
   keepAliveDuration = store.get('keepAliveDuration', 30);
   kaIntent = store.get('keepAliveOn', false);
@@ -655,6 +703,8 @@ app.whenReady().then(function() {
 
   credentials.init(app.getPath('userData'));
   console.log('[credentials] backend: ' + credentials.getBackend());
+  console.log('[workee] options: splitWindows=' + splitWindowsOn + ' gateMode=' + (fakeWideGate ? 'double' : 'off') +
+    ' uaOverride=' + uaOverride + ' flightFlags=' + flightFlagsOn + ' autoHideTabBar=' + autoHideTabBar + ' keepAliveOn=' + kaIntent);
   autofill.init({
     enabled: function() { return autoFillCreds; },
     getPassword: function() { return credentials.available() ? credentials.load() : null; },
@@ -667,7 +717,13 @@ app.whenReady().then(function() {
     },
   });
 
-  session.defaultSession.setPermissionRequestHandler(function(_wc, permission, callback) {
+  // Which permission the page actually asked for, and from which page. Electron answers these
+  // without any UI, so a client that waits for a prompt never gets one - this log is what tells
+  // us the difference between "nothing was requested" and "a request was answered silently".
+  session.defaultSession.setPermissionRequestHandler(function(wc, permission, callback) {
+    const t = tabForWebContents(wc);
+    console.log('[permission] ' + permission + ' requested by ' +
+      (t ? 'tab ' + t.id : 'window ' + (wc.getTitle() || wc.getURL().slice(0, 60))));
     callback(true);
   });
 
