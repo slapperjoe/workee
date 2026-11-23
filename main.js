@@ -14,7 +14,7 @@ for (const _stream of [process.stdout, process.stderr]) {
   });
 }
 
-const { app, BrowserWindow, BrowserView, ipcMain, session, desktopCapturer, Menu, dialog } = require('electron');
+const { app, BrowserWindow, BrowserView, ipcMain, session, desktopCapturer, Menu, dialog, screen, clipboard, globalShortcut } = require('electron');
 
 // Single-instance guard: two processes on the same Chromium profile collide
 // on LevelDB locks; the RDP WASM core then cannot open its IndexedDB store
@@ -65,6 +65,101 @@ let mediaHook = '';
 try {
   mediaHook = fs.readFileSync(path.join(__dirname, 'media-hook.js'), 'utf8');
 } catch (e) {}
+
+let screenShim = '';
+try {
+  screenShim = fs.readFileSync(path.join(__dirname, 'screen-shim.js'), 'utf8');
+} catch (e) {}
+
+// One-window-per-monitor (experimental). The AVD client's own multi-monitor path is
+// window-per-monitor, but it only runs when the page reports two screens and a window on
+// each; Electron gives us neither, so screen-shim.js supplies a virtual two-screen world
+// and the popup.html request is honoured as a real window instead of a tab.
+let splitWindowsOn = false;
+let fakeWideGate = false;
+let uaOverride = false;
+// Flags the client reads from the flight list; this tenant reports them false, which is
+// what disables the multi-monitor control regardless of the screen or gate. The shim
+// rewrites the flight response when this is on. See screen-shim.js.
+const FLIGHT_FLAGS = {
+  'Nh_Multi_Monitor': true,
+  'Nh_Split_Screen': true,
+  'Nh_Enable_Windowed_Secondary_Monitor': true,
+};
+let flightFlagsOn = false;
+// The client's supported-platform check is a user-agent test plus three API-presence
+// checks (AudioContext, getUserMedia, serviceWorker) that Electron passes. Only the UA
+// fails, and it gates the display settings panel. This is a deliberate override behind an
+// option, not a blanket change - the earlier UA/client-hint experiment was reverted for
+// the MFA path and stays reverted unless this option is on.
+const CHROME_UA = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+let DEFAULT_UA = null;
+
+function applyUserAgent() {
+  if (!DEFAULT_UA) DEFAULT_UA = session.defaultSession.userAgent;
+  try {
+    session.defaultSession.setUserAgent(uaOverride ? CHROME_UA : DEFAULT_UA);
+    console.log('[ua] ' + (uaOverride ? 'chrome ua applied - reload the tab for the client to see it' : 'default ua restored'));
+  } catch (e) {
+    console.warn('[ua] could not set user agent: ' + e.message);
+  }
+  if (uaOverride) {
+    // The Chrome UA must not reach Microsoft's sign-in pages. With a Chrome-looking UA the
+    // account page takes its WebAuthn/FIDO path (login.microsoft.com/common/fido/get), and
+    // Electron has no native passkey UI to render, so the sign-in stalls on a blank page.
+    // navigator.userAgent stays Chrome for the client's own platform check; only the
+    // requests to the login hosts are given back Electron's real UA.
+    session.defaultSession.webRequest.onBeforeSendHeaders(function (details, callback) {
+      if (/login\.microsoft(online)?\.com/.test(details.url) && details.requestHeaders) {
+        details.requestHeaders['User-Agent'] = DEFAULT_UA;
+      }
+      callback({ requestHeaders: details.requestHeaders });
+    });
+  }
+}
+const splitOwners = new Map(); // tabId -> BrowserWindow
+let pendingSplitOwner = null;
+
+// Order is deliberate, not left-to-right. The client's settings control is
+// `disabled:!U` where U is MultiMonitor.firstMonitorIndex, and that index comes from
+// Hn(window) - the screen whose availLeft/availTop matches the window's reported screen.
+// With one physical display that is always 0, so the control is disabled. Reporting the
+// main window as index 1 and the split window as index 0 is what makes it enabled.
+// Geometry is unaffected: Qn sizes each monitor from that window's own canvas rect.
+function virtualScreens() {
+  const d = (mainWindow && !mainWindow.isDestroyed() ? screen.getDisplayMatching(mainWindow.getBounds()) : null) || screen.getPrimaryDisplay();
+  const half = Math.floor(d.workArea.width / 2);
+  return [
+    { index: 0, id: d.id + '-workee-split', left: d.workArea.x + half, top: d.workArea.y, width: d.workArea.width - half, height: d.workArea.height, deviceScaleFactor: d.scaleFactor },
+    { index: 1, id: d.id + '-workee-main', left: d.workArea.x, top: d.workArea.y, width: half, height: d.workArea.height, deviceScaleFactor: d.scaleFactor },
+  ];
+}
+
+function injectShim(wc, index) {
+  if (!splitWindowsOn || !screenShim || !wc || wc.isDestroyed()) return;
+  // Read per call rather than once at startup: the shim's effect lives in the page, so a
+  // tab reload picks up any change to it without restarting the app (a restart costs a
+  // sign-in).
+  const src = (function () {
+    try { return fs.readFileSync(path.join(__dirname, 'screen-shim.js'), 'utf8'); } catch (e) { return screenShim; }
+  })();
+  const code = 'window.__workeeScreens=' + JSON.stringify(virtualScreens()) +
+    ';window.__workeeScreenIndex=' + index +
+    ';window.__workeeGateMode=' + (fakeWideGate ? "'double'" : 'null') +
+    ';window.__workeeFlightFlags=' + (flightFlagsOn ? JSON.stringify(FLIGHT_FLAGS) : 'null') +    ';' + src;
+  try {
+    wc.executeJavaScript(code).catch(function () {});
+  } catch (e) {}
+}
+
+// Note: the shim can only add the fake screen world, it cannot take it back out of a
+// page that already ran it - turning the option off needs the tab reloaded.
+function reInjectShims() {
+  tabs.forEach(function (t) { injectShim(t.view.webContents, 1); });
+  splitOwners.forEach(function (w, tabId) {
+    if (w && !w.isDestroyed()) injectShim(w.webContents, 0);
+  });
+}
 
 const tabBarContent = `<!DOCTYPE html><html><head><style>
   html,body{margin:0;padding:0;background:#161b22;overflow:hidden;height:36px;font-family:system-ui,sans-serif}
@@ -190,6 +285,7 @@ function createTab(id, url, title) {
   });
   const inject = () => {
     try { wc.setZoomFactor(zoomPercent / 100); } catch (e) {}
+    injectShim(wc, 1);
     if (!mediaHook) return;
     wc.executeJavaScript(mediaHook).then(() => {
       return wc.executeJavaScript(
@@ -353,6 +449,12 @@ function openCredentialsWindow() {
 }
 
 function createWindow() {
+  // The app does not size this window for the split path. On Wayland a client cannot move
+  // or resize its own window after it is mapped, so neither a creation-time half nor a later
+  // setBounds is reliably honoured, and the client's own AdjustChildWindow path (exitFullscreen
+  // then resizeTo/moveTo) is the thing that would place a window on a screen. Placement is the
+  // user's or the compositor's job here; the app's job is the virtual screen world, the flags,
+  // and the fullscreen state. Each remote monitor is sized from whatever that window actually is.
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 900,
@@ -387,11 +489,74 @@ app.on('web-contents-created', function(_event, wc) {
   wc.setWindowOpenHandler(function(details) {
     const url = details.url;
     if (url && url.indexOf('http') === 0) {
+      // The client's multi-monitor path opens its second window through window.open;
+      // it needs the returned Window object, so this one must actually be allowed.
+      if (splitWindowsOn && url.indexOf('/popup.html') >= 0) {
+        const owner = tabForWebContents(wc);
+        // One window per tab. The client re-issues window.open on every scenario
+        // re-evaluation and on reconnect, and each call created another window - the old
+        // ones stayed open but were no longer mapped to the tab, so they accumulated.
+        // A repeat open means the client has a fresh reference and no longer uses the one
+        // we mapped, so the old window is orphaned rather than reused: denying here would
+        // hand the client a null Window and it cannot build anything in it. Close the stale
+        // window and let this open create the one the client actually holds.
+        const existing = owner && splitOwners.get(owner.id);
+        if (existing && !existing.isDestroyed()) {
+          console.log('[split] repeat popup request for tab ' + owner.id + ' - closing the stale window before the new one (' + splitOwners.size + ' mapped)');
+          try { existing.close(); } catch (e) {}
+        }
+        pendingSplitOwner = owner;
+        const half = virtualScreens()[0];
+        // Create the window at its half instead of taking the client's features string
+        // (default size) and resizing afterwards. Qn() measures each monitor from that
+        // window's own position and its container rect, so a window that is still the
+        // default size when the client measures it produces a full-display monitor.
+        console.log('[split] popup request allowed for tab ' + (pendingSplitOwner ? pendingSplitOwner.id : 'none') +
+          ' as a real window, created at ' + half.left + ',' + half.top + ' ' + half.width + 'x' + half.height);
+        return { action: 'allow', overrideBrowserWindowOptions: { x: half.left, y: half.top, width: half.width, height: half.height } };
+      }
       addTab(url, details.frameName || 'VM');
       return { action: 'deny' };
     }
     return { action: 'allow' };
   });
+});
+
+function attachSplitWindow(w) {
+  const tab = pendingSplitOwner;
+  pendingSplitOwner = null;
+  if (!tab) return;
+  splitOwners.set(tab.id, w);
+  const screens = virtualScreens();
+  console.log('[split] virtual screens: ' + JSON.stringify(screens));
+  // screens[0] is the split window's screen, screens[1] the main window's (see virtualScreens).
+  try { w.setBounds({ x: screens[0].left, y: screens[0].top, width: screens[0].width, height: screens[0].height }); } catch (e) {}
+  // What the client will measure is the window's own position and its container rect, so
+  // log what it actually is rather than what we asked for.
+  try { console.log('[split] split window bounds: ' + JSON.stringify(w.getBounds()) + ' page DPR: ' + w.webContents.getZoomFactor()); } catch (e) {}
+  // Only reported, not applied: the app cannot place windows on Wayland. This log is what
+  // tells us what the app asked for versus what the client then measured.
+  console.log('[split] requested layout (not applied on Wayland): main ' + screens[1].width + 'x' + screens[1].height +
+    ' at ' + screens[1].left + ', split ' + screens[0].width + 'x' + screens[0].height + ' at ' + screens[0].left);
+  const wc = w.webContents;
+  try { wc.setZoomFactor(zoomPercent / 100); } catch (e) {}
+  // The client asks the child window for its screen details right after the open call,
+  // so the fake screen has to be in place at creation, not after the page parses.
+  injectShim(wc, 0);
+  wc.on('dom-ready', function () { injectShim(wc, 0); });
+  w.on('closed', function () {
+    console.log('[split] second window closed - rejoin handled by the client (its own beforeunload path)');
+    // Closing the child is the rejoin: the client's own handler runs off its
+    // beforeunload and sets secondMonitorIndex back to -1.
+    splitOwners.delete(tab.id);
+    pushState();
+  });
+  pushState();
+}
+
+app.on('browser-window-created', function (_event, w) {
+  if (!splitWindowsOn || !pendingSplitOwner) return;
+  attachSplitWindow(w);
 });
 
 app.whenReady().then(function() {
@@ -401,6 +566,21 @@ app.whenReady().then(function() {
   blockFullscreen = store.get('blockFullscreen', false);
   zoomPercent = store.get('zoomFactor', 100);
   autoFillCreds = store.get('autoFillCredentials', false);
+  splitWindowsOn = store.get('splitWindows', false);
+  fakeWideGate = store.get('fakeWideGate', false);
+  uaOverride = store.get('uaOverride', false);
+  flightFlagsOn = store.get('flightFlags', false);
+  DEFAULT_UA = session.defaultSession.userAgent;
+  if (uaOverride) applyUserAgent();
+
+  if (flightFlagsOn) {
+    // Log which request carries the flight list, so it is clear whether the page-side
+    // rewrite in screen-shim.js was installed before or after it.
+    session.defaultSession.webRequest.onBeforeRequest(function (details, callback) {
+      if (/flight/i.test(details.url)) console.log('[flight] request: ' + details.url);
+      callback({ cancel: false });
+    });
+  }
 
   credentials.init(app.getPath('userData'));
   console.log('[credentials] backend: ' + credentials.getBackend());
@@ -563,6 +743,82 @@ app.whenReady().then(function() {
           toggleBlockFullscreen();
         },
       },
+      { type: 'separator' },
+      {
+        label: 'One window per monitor (experimental)',
+        submenu: [
+          {
+            type: 'checkbox',
+            label: 'Use the client window-per-monitor path',
+            checked: splitWindowsOn,
+            click: function() {
+              splitWindowsOn = !splitWindowsOn;
+              store.set('splitWindows', splitWindowsOn);
+              reInjectShims();
+            },
+          },
+          {
+            type: 'checkbox',
+            label: 'Report double width to the ≥1600 gate (UI only)',
+            checked: fakeWideGate,
+            click: function() {
+              fakeWideGate = !fakeWideGate;
+              store.set('fakeWideGate', fakeWideGate);
+              reInjectShims();
+            },
+          },
+          {
+            type: 'checkbox',
+            label: 'Report a Chrome user agent (needs tab reload)',
+            checked: uaOverride,
+            click: function() {
+              uaOverride = !uaOverride;
+              store.set('uaOverride', uaOverride);
+              applyUserAgent();
+            },
+          },
+          {
+            type: 'checkbox',
+            label: 'Force flight flags (needs tab reload)',
+            checked: flightFlagsOn,
+            click: function() {
+              flightFlagsOn = !flightFlagsOn;
+              store.set('flightFlags', flightFlagsOn);
+              reInjectShims();
+            },
+          },
+          {
+            label: 'Inspect the second window',
+            enabled: splitOwners.has(activeTabId),
+            click: function() {
+              const w = splitOwners.get(activeTabId);
+              if (!w || w.isDestroyed()) return;
+              w.webContents.openDevTools({ mode: 'detach' });
+            },
+          },
+          {
+            label: 'Reload the second window',
+            enabled: splitOwners.has(activeTabId),
+            click: function() {
+              const w = splitOwners.get(activeTabId);
+              if (!w || w.isDestroyed()) return;
+              // The shim is read from disk per injection, so this re-runs whatever the
+              // current screen-shim.js contains - no app restart needed to test a change.
+              injectShim(w.webContents, 0);
+              w.webContents.reload();
+            },
+          },
+          {
+            label: 'Rejoin split windows',
+            enabled: splitOwners.has(activeTabId),
+            click: function() {
+              const w = splitOwners.get(activeTabId);
+              if (w && !w.isDestroyed()) w.close();
+            },
+          },
+        ],
+      },
+      { type: 'separator' },
       {
         label: 'Interface scale',
         submenu: [80, 90, 100, 110, 125, 150, 175, 200].map(function(p) {
