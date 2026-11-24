@@ -126,9 +126,13 @@ let uaOverride = false;
 // Flags the client reads from the flight list; this tenant reports them false, which is
 // what disables the multi-monitor control regardless of the screen or gate. The shim
 // rewrites the flight response when this is on. See screen-shim.js.
+// Nh_Split_Screen stays false: in the SplitScreen scenario the client maps every pointer event
+// against canvasList[0] (onCanvasPosition), so input inside the second window's canvas is measured
+// from the primary canvas at the top-left and lands in the wrong place. The MultiMonitor scenario
+// uses the canvas the event actually came from, which is the one this two-window layout needs.
 const FLIGHT_FLAGS = {
   'Nh_Multi_Monitor': true,
-  'Nh_Split_Screen': true,
+  'Nh_Split_Screen': false,
   'Nh_Enable_Windowed_Secondary_Monitor': true,
 };
 let flightFlagsOn = false;
