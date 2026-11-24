@@ -87,17 +87,30 @@ function setup() {
   const root = document.documentElement;
   if (flagEl) {
     let dwell = null;
+    function openFlag() {
+      flagEl.classList.add('open');
+      ipcRenderer.send('flag-open');
+    }
     root.addEventListener('pointerenter', function () {
+      // The flag is only as wide as the grab handle until this point, so entering it is also
+      // the moment the rest of it is allowed to appear.
+      openFlag();
       if (dwell) clearTimeout(dwell);
       dwell = setTimeout(function () {
         dwell = null;
         ipcRenderer.send('tabbar-show');
       }, DWELL_MS);
+
     });
     root.addEventListener('pointerleave', function () {
+      flagEl.classList.remove('open');
+      ipcRenderer.send('flag-close');
       if (dwell) { clearTimeout(dwell); dwell = null; }
     });
-    flagEl.addEventListener('click', function () { ipcRenderer.send('tabbar-show'); });
+    flagEl.addEventListener('click', function () {
+      openFlag();
+      ipcRenderer.send('tabbar-show');
+    });
     flagEl.querySelectorAll('.mv').forEach(function (el) {
       el.addEventListener('click', function (e) {
         e.stopPropagation();

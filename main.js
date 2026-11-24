@@ -64,11 +64,16 @@ let zoomPercent = 100;
 // the bar collapses it again after GRACE_MS.
 // Widened for the two move arrows; the flag is the only place those controls exist when the bar
 // is auto-hidden, so they have to fit here.
-const FLAG_W = 86;
+const FLAG_W = 100;
+// Collapsed width: the grab handle only, so nothing in the corner is shown until the pointer
+// is on it or it is clicked. A BrowserView background cannot be made reliably transparent, so
+// the flag is sized to what is visible instead of painting an invisible area.
+const FLAG_MIN_W = 24;
 const FLAG_H = 18;
 const GRACE_MS = 3000;
 let autoHideTabBar = false;
 let barHidden = false;
+let flagExpanded = false;
 let flagView = null;
 let collapseTimer = null;
 const signalingUrl = process.env.SCREENSHARE_SIGNALING_URL || 'ws://localhost:8080';
@@ -245,10 +250,15 @@ const flagContent = `<!DOCTYPE html><html><head><style>
   #flag:hover{background:#21262d}
   #flag:hover svg{fill:#c9d1d9}
   #flag:hover .dot{background:#58a6ff}
+  #flag .glyph, #flag .mv{display:none}
+  #flag.open .glyph{display:flex;align-items:center;gap:5px}
+  #flag.open .mv{display:inline}
   #flag .mv{font-size:13px;line-height:1;color:#8b949e;cursor:pointer;padding:0 3px}
   #flag .mv:hover{color:#58a6ff}
+  #flag .grab svg{width:12px;height:12px;stroke:#8b949e;fill:none;stroke-width:2}
+  #flag:hover .grab svg{stroke:#58a6ff}
   </style></head><body>
-  <div id="flag" title="Tab bar hidden - hover here to show it"><svg viewBox="0 0 24 24"><path d="M5 2h2v20H5z"/><path d="M7 2l11 4-11 4z"/></svg><span class="dot"></span><span class="mv" data-dir="left" title="Move the focused window to the left monitor">&#9664;</span><span class="mv" data-dir="right" title="Move the focused window to the right monitor">&#9654;</span></div>
+  <div id="flag" title="Tab bar hidden - hover here to show it"><span class="glyph"><svg viewBox="0 0 24 24"><path d="M5 2h2v20H5z"/><path d="M7 2l11 4-11 4z"/></svg><span class="dot"></span></span><span class="mv" data-dir="left" title="Move the focused window to the left monitor">&#9664;</span><span class="mv" data-dir="right" title="Move the focused window to the right monitor">&#9654;</span><span class="grab" title="Grab: show the tab bar"><svg viewBox="0 0 24 24"><path d="M7 5v14M12 5v14M17 5v14"/></svg></span></div>
   </body></html>`;
 
 function activeTab() {
@@ -286,7 +296,7 @@ function layout() {
     // The flag floats over the page corner, so the tab can use the full height.
     if (tabBarView) tabBarView.setBounds({ x: 0, y: 0, width: 0, height: 0 });
     if (flagView) {
-      flagView.setBounds({ x: 0, y: 0, width: FLAG_W, height: FLAG_H });
+      flagView.setBounds({ x: 0, y: 0, width: flagExpanded ? FLAG_W : FLAG_MIN_W, height: FLAG_H });
       try { mainWindow.setTopBrowserView(flagView); } catch (e) {}
     }
   } else {
@@ -307,6 +317,8 @@ function showTabBar() {
   if (collapseTimer) { clearTimeout(collapseTimer); collapseTimer = null; }
   if (!barHidden) return;
   barHidden = false;
+  // Opening the bar ends the hover state; a later collapse starts collapsed again.
+  flagExpanded = false;
   layout();
   pushState();
 }
@@ -868,6 +880,16 @@ app.whenReady().then(function() {
   });
 
   ipcMain.on('tabbar-show', function() { showTabBar(); });
+  ipcMain.on('flag-open', function() {
+    if (flagExpanded) return;
+    flagExpanded = true;
+    layout();
+  });
+  ipcMain.on('flag-close', function() {
+    if (!flagExpanded) return;
+    flagExpanded = false;
+    layout();
+  });
   ipcMain.on('tabbar-enter', function() {
     if (collapseTimer) { clearTimeout(collapseTimer); collapseTimer = null; }
   });
