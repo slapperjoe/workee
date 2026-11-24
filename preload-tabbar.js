@@ -77,7 +77,7 @@ contextBridge.exposeInMainWorld('api', {
 const ARROW_L = '<svg viewBox="0 0 24 24"><path d="M15 4L7 12l8 8z"/></svg>';
 const ARROW_R = '<svg viewBox="0 0 24 24"><path d="M9 4l8 8-8 8z"/></svg>';
 
-const DWELL_MS = 1000;
+const DWELL_MS = 3000;   // time on the open flag before the whole bar takes over
 
 // In the flag the two arrows are the only controls: the bar is hidden by definition there.
 // Clicks must not bubble to the flag itself, whose click shows the bar.
@@ -87,6 +87,13 @@ function setup() {
   const root = document.documentElement;
   if (flagEl) {
     let dwell = null;
+    function arm() {
+      if (dwell) clearTimeout(dwell);
+      dwell = setTimeout(function () {
+        dwell = null;
+        ipcRenderer.send('tabbar-show');
+      }, DWELL_MS);
+    }
     function openFlag() {
       flagEl.classList.add('open');
       ipcRenderer.send('flag-open');
@@ -95,12 +102,7 @@ function setup() {
       // The flag is only as wide as the grab handle until this point, so entering it is also
       // the moment the rest of it is allowed to appear.
       openFlag();
-      if (dwell) clearTimeout(dwell);
-      dwell = setTimeout(function () {
-        dwell = null;
-        ipcRenderer.send('tabbar-show');
-      }, DWELL_MS);
-
+      arm();
     });
     root.addEventListener('pointerleave', function () {
       flagEl.classList.remove('open');
@@ -115,6 +117,9 @@ function setup() {
       el.addEventListener('click', function (e) {
         e.stopPropagation();
         ipcRenderer.send('move-focus', el.getAttribute('data-dir'));
+        // Pressing a control on the open flag means the user is working there, not on the bar:
+        // restart the dwell so the flag stays up for the same length of time.
+        arm();
       });
     });
   } else if (document.getElementById('tabs')) {
